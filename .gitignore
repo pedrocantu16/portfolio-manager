@@ -1,6 +1,6 @@
 # Portfolio data files (may contain sensitive financial info)
 Portfolio_Positions*.csv
-data/
+/data/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
