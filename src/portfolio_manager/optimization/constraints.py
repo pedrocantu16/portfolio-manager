@@ -90,3 +90,88 @@ def max_volatility_constraint(
         return max_vol - port_vol
 
     return {"type": "ineq", "fun": constraint_fn}
+
+
+def sector_max_weight_constraint(
+    max_sector_weight: float,
+    symbols: list[str],
+    sector_map: dict[str, str],
+) -> list[dict]:
+    """Constraint: maximum weight per sector.
+
+    Args:
+        max_sector_weight: Maximum total weight for any single sector.
+        symbols: List of symbols in order matching weight array.
+        sector_map: Dictionary mapping symbol to sector name.
+
+    Returns:
+        List of inequality constraints (one per sector).
+    """
+    # Group symbols by sector
+    sectors: dict[str, list[int]] = {}
+    for i, symbol in enumerate(symbols):
+        sector = sector_map.get(symbol, "Unknown")
+        if sector not in sectors:
+            sectors[sector] = []
+        sectors[sector].append(i)
+
+    constraints = []
+    for sector, indices in sectors.items():
+        if sector == "Unknown":
+            continue  # Don't constrain unknown sectors
+
+        def make_constraint(idx_list: list[int]) -> dict:
+            def constraint_fn(weights: np.ndarray) -> float:
+                sector_weight = sum(weights[i] for i in idx_list)
+                return max_sector_weight - sector_weight
+
+            return {"type": "ineq", "fun": constraint_fn}
+
+        constraints.append(make_constraint(indices))
+
+    return constraints
+
+
+def sector_min_weight_constraint(
+    min_sector_weight: float,
+    symbols: list[str],
+    sector_map: dict[str, str],
+    sectors_to_constrain: list[str] | None = None,
+) -> list[dict]:
+    """Constraint: minimum weight per sector.
+
+    Args:
+        min_sector_weight: Minimum total weight for specified sectors.
+        symbols: List of symbols in order matching weight array.
+        sector_map: Dictionary mapping symbol to sector name.
+        sectors_to_constrain: List of sectors to apply constraint to.
+            If None, applies to all sectors.
+
+    Returns:
+        List of inequality constraints.
+    """
+    # Group symbols by sector
+    sectors: dict[str, list[int]] = {}
+    for i, symbol in enumerate(symbols):
+        sector = sector_map.get(symbol, "Unknown")
+        if sector not in sectors:
+            sectors[sector] = []
+        sectors[sector].append(i)
+
+    constraints = []
+    for sector, indices in sectors.items():
+        if sectors_to_constrain and sector not in sectors_to_constrain:
+            continue
+        if sector == "Unknown":
+            continue
+
+        def make_constraint(idx_list: list[int]) -> dict:
+            def constraint_fn(weights: np.ndarray) -> float:
+                sector_weight = sum(weights[i] for i in idx_list)
+                return sector_weight - min_sector_weight
+
+            return {"type": "ineq", "fun": constraint_fn}
+
+        constraints.append(make_constraint(indices))
+
+    return constraints

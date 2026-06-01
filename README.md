@@ -8,6 +8,9 @@ A Python CLI for portfolio analysis and optimization. Fetches real market data f
 - **Risk Metrics**: Volatility, VaR, max drawdown, Sharpe/Sortino ratios
 - **Portfolio Optimization**: Mean-variance optimization with multiple objectives
 - **Return Estimation**: Historical returns, CAPM, or shrinkage estimators
+- **Sector Analysis**: View sector allocation and concentration
+- **Tax-Loss Harvesting**: Identify opportunities to harvest losses and reduce taxes
+- **Transaction Costs**: Estimate spread and commission costs for rebalancing
 
 ## Installation
 
@@ -115,6 +118,39 @@ List all holdings with descriptions.
 uv run portfolio holdings Portfolio_Positions.csv
 ```
 
+### `portfolio sectors <csv>`
+
+Show sector allocation of the portfolio.
+
+```bash
+uv run portfolio sectors Portfolio_Positions.csv
+```
+
+**Output includes:**
+- Weight and value per sector
+- Number of positions per sector
+- List of holdings by sector
+
+### `portfolio tax-harvest <csv>`
+
+Analyze tax-loss harvesting opportunities.
+
+```bash
+uv run portfolio tax-harvest Portfolio_Positions.csv --tax-rate 0.25 --min-loss 100
+```
+
+**Options:**
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--tax-rate` | `0.25` | Combined federal + state tax rate |
+| `--min-loss` | `100` | Minimum loss in dollars to consider |
+
+**Output includes:**
+- Total unrealized gains and harvestable losses
+- Potential tax savings
+- Candidates for harvesting with alternative investments
+- Wash sale rule reminders
+
 ## Return Estimation Methods
 
 ### Historical (default)
@@ -180,7 +216,11 @@ src/portfolio_manager/
 ├── cli/main.py              # CLI commands
 ├── core/
 │   ├── position.py          # Position dataclass
-│   └── portfolio.py         # Portfolio class
+│   ├── portfolio.py         # Portfolio class
+│   ├── account.py           # Multi-account support
+│   ├── sectors.py           # Sector classification
+│   ├── costs.py             # Transaction cost modeling
+│   └── tax.py               # Tax-loss harvesting
 ├── data/
 │   ├── parsers/fidelity.py  # Fidelity CSV parser
 │   └── market.py            # Yahoo Finance wrapper
@@ -190,7 +230,7 @@ src/portfolio_manager/
 │   └── ratios.py            # Sharpe, Sortino
 └── optimization/
     ├── objectives.py        # Objective functions
-    ├── constraints.py       # Constraint builders
+    ├── constraints.py       # Constraint builders (incl. sector)
     └── optimizer.py         # Mean-variance optimizer
 ```
 

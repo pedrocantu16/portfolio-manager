@@ -7,7 +7,10 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from portfolio_manager.core.costs import CostModel
 from portfolio_manager.core.portfolio import Portfolio
+from portfolio_manager.core.sectors import Sector, get_sectors_for_portfolio
+from portfolio_manager.core.tax import analyze_tax_loss_harvesting, get_wash_sale_alternatives
 from portfolio_manager.data.market import MarketDataFetcher
 from portfolio_manager.data.parsers.fidelity import FidelityParser
 from portfolio_manager.metrics import (
@@ -662,6 +665,164 @@ def rebalance(
     )
 
     console.print(comp_table)
+
+    # Transaction costs
+    cost_model = CostModel()
+    trade_dict = {symbol: trade_val for symbol, _, _, trade_val in trades}
+    costs = cost_model.estimate_rebalance_costs(trade_dict)
+
+    if costs.total_cost > 0:
+        console.print()
+        console.print("[bold]Estimated Transaction Costs:[/bold]")
+        console.print(f"  Total Trades:    ${costs.total_trade_value:,.0f}")
+        console.print(f"  Spread Cost:     ${costs.total_spread_cost:,.2f}")
+        console.print(f"  Total Cost:      ${costs.total_cost:,.2f} ({costs.cost_percent:.2f}%)")
+    console.print()
+
+
+@app.command()
+def sectors(
+    file_path: Annotated[
+        Path | None, typer.Argument(help="Path to CSV file (optional if loaded)")
+    ] = None,
+) -> None:
+    """Show sector allocation of portfolio."""
+    global _loaded_portfolio
+
+    if file_path:
+        load(file_path)
+
+    portfolio = _get_portfolio()
+
+    console.print()
+    console.print("[bold]Sector Allocation[/bold]")
+    console.print("─" * 50)
+
+    # Get sectors for all symbols
+    symbols = portfolio.get_symbols(include_cash=False)
+    sector_map = get_sectors_for_portfolio(symbols, use_api=False)
+
+    # Calculate sector weights
+    weights = portfolio.get_weights(include_cash=False)
+    sector_weights: dict[Sector, float] = {}
+    sector_values: dict[Sector, float] = {}
+
+    for symbol, weight in weights.items():
+        sector = sector_map.get(symbol, Sector.UNKNOWN)
+        sector_weights[sector] = sector_weights.get(sector, 0.0) + weight
+        pos = portfolio.get_position(symbol)
+        if pos:
+            sector_values[sector] = sector_values.get(sector, 0.0) + pos.current_value
+
+    # Sort by weight
+    sorted_sectors = sorted(sector_weights.items(), key=lambda x: x[1], reverse=True)
+
+    table = Table()
+    table.add_column("Sector")
+    table.add_column("Weight", justify="right")
+    table.add_column("Value", justify="right")
+    table.add_column("Positions", justify="right")
+
+    for sector, weight in sorted_sectors:
+        # Count positions in sector
+        count = sum(1 for s in symbols if sector_map.get(s) == sector)
+        value = sector_values.get(sector, 0)
+
+        table.add_row(
+            sector.value,
+            f"{weight*100:.1f}%",
+            f"${value:,.0f}",
+            str(count),
+        )
+
+    console.print(table)
+
+    # Show positions by sector
+    console.print()
+    console.print("[bold]Positions by Sector:[/bold]")
+
+    for sector, _ in sorted_sectors:
+        sector_symbols = [s for s in symbols if sector_map.get(s) == sector]
+        if sector_symbols:
+            positions_str = ", ".join(sector_symbols)
+            console.print(f"  {sector.value}: {positions_str}")
+
+    console.print()
+
+
+@app.command()
+def tax_harvest(
+    file_path: Annotated[
+        Path | None, typer.Argument(help="Path to CSV file (optional if loaded)")
+    ] = None,
+    tax_rate: Annotated[
+        float, typer.Option(help="Combined tax rate (e.g., 0.25 = 25%)")
+    ] = 0.25,
+    min_loss: Annotated[
+        float, typer.Option(help="Minimum loss in dollars to consider")
+    ] = 100.0,
+) -> None:
+    """Analyze tax-loss harvesting opportunities."""
+    global _loaded_portfolio
+
+    if file_path:
+        load(file_path)
+
+    portfolio = _get_portfolio()
+
+    console.print()
+    console.print("[bold]Tax-Loss Harvesting Analysis[/bold]")
+    console.print("─" * 50)
+
+    analysis = analyze_tax_loss_harvesting(
+        portfolio,
+        tax_rate=tax_rate,
+        min_loss_threshold=min_loss,
+    )
+
+    if not analysis.candidates:
+        console.print("[green]No tax-loss harvesting opportunities found.[/green]")
+        console.print(f"  Total Gains: ${analysis.total_gains:,.2f}")
+        console.print()
+        return
+
+    # Summary
+    console.print(f"  Total Unrealized Gains:  ${analysis.total_gains:,.2f}")
+    console.print(f"  Total Harvestable Loss:  ${analysis.total_harvestable_loss:,.2f}")
+    console.print(f"  Net Gain/Loss:           ${analysis.net_gain_loss:,.2f}")
+    console.print(f"  Potential Tax Savings:   [green]${analysis.total_tax_savings:,.2f}[/green]")
+    console.print()
+
+    # Candidates table
+    console.print("[bold]Harvesting Candidates:[/bold]")
+
+    table = Table()
+    table.add_column("Symbol", style="cyan")
+    table.add_column("Value", justify="right")
+    table.add_column("Loss", justify="right")
+    table.add_column("Loss %", justify="right")
+    table.add_column("Tax Savings", justify="right")
+    table.add_column("Alternatives")
+
+    for candidate in analysis.candidates:
+        pos = candidate.position
+        alternatives = get_wash_sale_alternatives(pos.symbol)
+        alt_str = ", ".join(alternatives[:3])
+
+        table.add_row(
+            pos.symbol,
+            f"${pos.current_value:,.0f}",
+            f"[red]${candidate.unrealized_loss:,.0f}[/red]",
+            f"[red]-{candidate.loss_percent:.1f}%[/red]",
+            f"[green]${candidate.tax_savings_estimate:,.0f}[/green]",
+            alt_str,
+        )
+
+    console.print(table)
+
+    console.print()
+    console.print("[dim]Note: Alternatives are suggestions to avoid wash sale rule.[/dim]")
+    console.print("[dim]Wait 30 days before repurchasing the same security.[/dim]")
     console.print()
 
 

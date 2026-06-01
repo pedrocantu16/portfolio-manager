@@ -31,57 +31,75 @@ Python CLI application for portfolio management with risk/return analysis and op
 
 ---
 
-## Phase 2: Optimization ✅ COMPLETE
+## Phase 2: Optimization & Analysis ✅ COMPLETE
 
-### Implemented
-- [x] `objectives.py` - Objective functions (max Sharpe, min volatility, max return)
-- [x] `constraints.py` - Position size constraints, weights sum to 1
-- [x] `optimizer.py` - Mean-variance optimization using scipy.optimize
-- [x] CLI command: `optimize` - Find optimal allocation
-- [x] CLI command: `rebalance` - Show trades needed to reach optimal
-- [x] Return estimation methods: historical (with shrinkage/cap) and CAPM
-- [x] Unit tests for optimizer (8 tests)
+### Optimization
+- [x] Mean-variance optimization (`optimization/optimizer.py`)
+- [x] Objectives: max_sharpe, min_volatility, max_return
+- [x] Position constraints (min/max weight per position)
+- [x] Return estimation: historical (with shrinkage/cap) and CAPM
+- [x] CLI commands: `optimize`, `rebalance`
 
-### Return Estimation Methods
-| Method | Description | Use Case |
-|--------|-------------|----------|
-| `historical` | Historical mean returns with shrinkage and cap | Default, balanced |
-| `capm` | Beta-based (E(R) = Rf + β × MRP) | Conservative, theory-based |
+### Additional Features
+- [x] Multiple account support (`core/account.py`)
+- [x] Sector classification (`core/sectors.py`)
+- [x] Sector constraints for optimizer
+- [x] Transaction cost modeling (`core/costs.py`)
+- [x] Tax-loss harvesting analysis (`core/tax.py`)
+- [x] CLI commands: `sectors`, `tax-harvest`
 
 ### CLI Usage
 ```bash
-# Historical with adjustments (default)
-uv run portfolio optimize Portfolio_Positions.csv --max-position 0.3
+# Optimization
+uv run portfolio optimize <csv> --max-position 0.3 --method capm
+uv run portfolio rebalance <csv>
 
-# CAPM-based returns
-uv run portfolio optimize Portfolio_Positions.csv --method capm
-
-# Minimum volatility
-uv run portfolio optimize Portfolio_Positions.csv --objective min_volatility
-
-# Rebalancing analysis
-uv run portfolio rebalance Portfolio_Positions.csv
+# Analysis
+uv run portfolio sectors <csv>
+uv run portfolio tax-harvest <csv> --tax-rate 0.25
 ```
-
-### Future Enhancements
-- [ ] Multiple account support (`core/account.py`)
-- [ ] Sector classification and constraints
-- [ ] Transaction cost modeling
-- [ ] Tax-loss harvesting suggestions
 
 ---
 
-## Phase 3: Web UI (Future)
+## Phase 3: Advanced Features (Next)
 
-### 3.1 Backend
+### Benchmarking
+- [ ] Benchmark comparison (vs S&P 500, custom benchmark)
+- [ ] Alpha/Beta calculations
+- [ ] Tracking error
+
+### Backtesting
+- [ ] Historical portfolio backtesting
+- [ ] Walk-forward optimization
+- [ ] Monte Carlo simulation
+
+### Data & Export
+- [ ] Export recommendations to CSV/JSON
+- [ ] Support for other brokerages (Schwab, Vanguard, Interactive Brokers)
+- [ ] Import transaction history
+
+### CLI Commands (Planned)
+```bash
+portfolio benchmark <csv> --vs SPY
+portfolio backtest <csv> --period 5y
+portfolio export <csv> --format csv
+```
+
+---
+
+## Phase 4: Web UI (Future)
+
+### Backend
 - [ ] FastAPI backend exposing core functionality
 - [ ] REST API endpoints for portfolio operations
 - [ ] WebSocket for real-time updates
+- [ ] User authentication
 
-### 3.2 Frontend
+### Frontend
 - [ ] React or Streamlit dashboard
-- [ ] Interactive charts (portfolio allocation, performance)
+- [ ] Interactive charts (allocation pie, performance line)
 - [ ] Optimization visualization (efficient frontier)
+- [ ] Real-time price updates
 
 ---
 
@@ -94,7 +112,10 @@ portfolio-manager/
 │   ├── core/
 │   │   ├── position.py          # Position dataclass
 │   │   ├── portfolio.py         # Portfolio class
-│   │   └── account.py           # Account class (TODO)
+│   │   ├── account.py           # Multi-account support
+│   │   ├── sectors.py           # Sector classification
+│   │   ├── costs.py             # Transaction cost modeling
+│   │   └── tax.py               # Tax-loss harvesting
 │   ├── data/
 │   │   ├── parsers/
 │   │   │   ├── base.py          # Abstract parser
@@ -107,7 +128,7 @@ portfolio-manager/
 │   ├── optimization/
 │   │   ├── objectives.py        # Objective functions
 │   │   ├── constraints.py       # Constraint builders
-│   │   └── optimizer.py         # Portfolio optimizer
+│   │   └── optimizer.py         # Mean-variance optimizer
 │   └── config.py                # Settings
 ├── tests/
 │   ├── test_parser.py
@@ -124,12 +145,15 @@ portfolio-manager/
 source ~/.local/bin/env
 uv sync
 
-# Run tests (29 total)
+# Run tests
 uv run pytest tests/ -v
 
-# Use CLI
+# CLI commands
 uv run portfolio --help
-uv run portfolio metrics <your-portfolio.csv>
-uv run portfolio optimize <your-portfolio.csv> --max-position 0.3
-uv run portfolio rebalance <your-portfolio.csv>
+uv run portfolio summary <csv>
+uv run portfolio metrics <csv>
+uv run portfolio optimize <csv> --max-position 0.3
+uv run portfolio rebalance <csv>
+uv run portfolio sectors <csv>
+uv run portfolio tax-harvest <csv>
 ```
