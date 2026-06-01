@@ -29,30 +29,41 @@ Python CLI application for portfolio management with risk/return analysis and op
 - [x] CLI commands: `load`, `summary`, `metrics`, `holdings`
 - [x] Unit tests (21 passing)
 
-### CLI Usage
-```bash
-uv run portfolio load Portfolio_Positions.csv
-uv run portfolio summary Portfolio_Positions.csv
-uv run portfolio metrics Portfolio_Positions.csv --period 1y
-uv run portfolio holdings Portfolio_Positions.csv
-```
-
 ---
 
-## Phase 2: Optimization (Next)
+## Phase 2: Optimization ✅ COMPLETE
 
-### 2.1 Optimizer (`src/portfolio_manager/optimization/`)
-- [ ] `objectives.py` - Objective functions (max return, min risk, max Sharpe)
-- [ ] `constraints.py` - Position/sector constraints
-- [ ] `optimizer.py` - Mean-variance optimization using scipy.optimize
+### Implemented
+- [x] `objectives.py` - Objective functions (max Sharpe, min volatility, max return)
+- [x] `constraints.py` - Position size constraints, weights sum to 1
+- [x] `optimizer.py` - Mean-variance optimization using scipy.optimize
+- [x] CLI command: `optimize` - Find optimal allocation
+- [x] CLI command: `rebalance` - Show trades needed to reach optimal
+- [x] Return estimation methods: historical (with shrinkage/cap) and CAPM
+- [x] Unit tests for optimizer (8 tests)
 
-### 2.2 CLI Commands
+### Return Estimation Methods
+| Method | Description | Use Case |
+|--------|-------------|----------|
+| `historical` | Historical mean returns with shrinkage and cap | Default, balanced |
+| `capm` | Beta-based (E(R) = Rf + β × MRP) | Conservative, theory-based |
+
+### CLI Usage
 ```bash
-portfolio optimize --objective sharpe --max-position 0.3
-portfolio rebalance --target-weights <file>
+# Historical with adjustments (default)
+uv run portfolio optimize Portfolio_Positions.csv --max-position 0.3
+
+# CAPM-based returns
+uv run portfolio optimize Portfolio_Positions.csv --method capm
+
+# Minimum volatility
+uv run portfolio optimize Portfolio_Positions.csv --objective min_volatility
+
+# Rebalancing analysis
+uv run portfolio rebalance Portfolio_Positions.csv
 ```
 
-### 2.3 Additional Features
+### Future Enhancements
 - [ ] Multiple account support (`core/account.py`)
 - [ ] Sector classification and constraints
 - [ ] Transaction cost modeling
@@ -93,14 +104,15 @@ portfolio-manager/
 │   │   ├── returns.py           # Return calculations
 │   │   ├── risk.py              # Risk metrics
 │   │   └── ratios.py            # Sharpe, Sortino, etc.
-│   ├── optimization/            # TODO
-│   │   ├── objectives.py
-│   │   ├── constraints.py
-│   │   └── optimizer.py
+│   ├── optimization/
+│   │   ├── objectives.py        # Objective functions
+│   │   ├── constraints.py       # Constraint builders
+│   │   └── optimizer.py         # Portfolio optimizer
 │   └── config.py                # Settings
 ├── tests/
 │   ├── test_parser.py
-│   └── test_metrics.py
+│   ├── test_metrics.py
+│   └── test_optimizer.py
 └── PLAN.md
 ```
 
@@ -112,10 +124,12 @@ portfolio-manager/
 source ~/.local/bin/env
 uv sync
 
-# Run tests
+# Run tests (29 total)
 uv run pytest tests/ -v
 
 # Use CLI
 uv run portfolio --help
 uv run portfolio metrics <your-portfolio.csv>
+uv run portfolio optimize <your-portfolio.csv> --max-position 0.3
+uv run portfolio rebalance <your-portfolio.csv>
 ```
