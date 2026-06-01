@@ -441,15 +441,50 @@ def optimize(
 
     console.print(table)
 
-    # Summary metrics
-    console.print()
-    console.print("[bold]Expected Performance:[/bold]")
-    ret_style = "green" if result.expected_return >= 0 else "red"
-    console.print(
-        f"  Expected Return:  [{ret_style}]{result.expected_return*100:+.1f}%[/{ret_style}]"
+    # Calculate current portfolio metrics for comparison
+    current_return = calculate_portfolio_return(current_weights, returns, annualize=True)
+    current_vol = calculate_portfolio_volatility(current_weights, returns, annualize=True)
+    current_sharpe = (
+        (current_return - risk_free_rate) / current_vol if current_vol > 0 else 0.0
     )
-    console.print(f"  Volatility:       {result.volatility*100:.1f}%")
-    console.print(f"  Sharpe Ratio:     {result.sharpe_ratio:.2f}")
+
+    # Comparison table
+    console.print()
+    console.print("[bold]Performance Comparison:[/bold]")
+
+    def fmt_change(curr: float, opt: float, pct: bool = True) -> str:
+        diff = opt - curr
+        style = "green" if diff > 0 else "red" if diff < 0 else "dim"
+        if pct:
+            return f"[{style}]{diff*100:+.1f}%[/{style}]"
+        return f"[{style}]{diff:+.2f}[/{style}]"
+
+    comp_table = Table(show_header=True)
+    comp_table.add_column("Metric")
+    comp_table.add_column("Current", justify="right")
+    comp_table.add_column("Optimal", justify="right")
+    comp_table.add_column("Change", justify="right")
+
+    comp_table.add_row(
+        "Expected Return",
+        f"{current_return*100:.1f}%",
+        f"{result.expected_return*100:.1f}%",
+        fmt_change(current_return, result.expected_return),
+    )
+    comp_table.add_row(
+        "Volatility",
+        f"{current_vol*100:.1f}%",
+        f"{result.volatility*100:.1f}%",
+        fmt_change(current_vol, result.volatility),
+    )
+    comp_table.add_row(
+        "Sharpe Ratio",
+        f"{current_sharpe:.2f}",
+        f"{result.sharpe_ratio:.2f}",
+        fmt_change(current_sharpe, result.sharpe_ratio, pct=False),
+    )
+
+    console.print(comp_table)
     console.print()
 
 
