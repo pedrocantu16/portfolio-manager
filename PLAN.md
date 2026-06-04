@@ -75,9 +75,10 @@ uv run portfolio tax-harvest <csv> --tax-rate 0.25
 - [x] Monte Carlo simulation
 - [ ] Walk-forward optimization (future)
 
-### Data & Export
+### Data & Export ✅
 - [x] Export recommendations to CSV/JSON
-- [ ] Support for other brokerages (Schwab, Vanguard, Interactive Brokers)
+- [x] Generic CSV parser (user-provided format with quantity, weight, or value)
+- [ ] Support for specific brokerages (Schwab, Vanguard, Interactive Brokers)
 - [ ] Import transaction history
 
 ### CLI Commands (Planned)

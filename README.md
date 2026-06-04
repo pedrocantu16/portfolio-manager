@@ -15,6 +15,28 @@ A Python CLI for portfolio analysis and optimization. Fetches real market data f
 - **Tax-Loss Harvesting**: Identify opportunities to harvest losses and reduce taxes
 - **Transaction Costs**: Estimate spread and commission costs for rebalancing
 
+## Supported Formats
+
+**Fidelity CSV** - Auto-detected from Fidelity portfolio exports
+
+**Generic CSV** - Flexible format for any brokerage. Supports three modes:
+
+| Mode | Required Column | Description |
+|------|-----------------|-------------|
+| Quantity | `symbol`, `quantity` | Number of shares (prices fetched automatically) |
+| Weight | `symbol`, `weight` | Portfolio % (e.g., 40 or 0.40) |
+| Value | `symbol`, `value` | Dollar amount per position |
+
+Optional columns: `cost_basis`, `current_price`, `account`, `name`
+
+```bash
+# Generate a template
+uv run portfolio template my_portfolio.csv --type weight
+
+# Load any supported format (auto-detected)
+uv run portfolio summary my_portfolio.csv
+```
+
 ## Installation
 
 Requires Python 3.11+ and [uv](https://github.com/astral-sh/uv).
