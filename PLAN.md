@@ -76,7 +76,7 @@ uv run portfolio tax-harvest <csv> --tax-rate 0.25
 - [ ] Walk-forward optimization (future)
 
 ### Data & Export
-- [ ] Export recommendations to CSV/JSON
+- [x] Export recommendations to CSV/JSON
 - [ ] Support for other brokerages (Schwab, Vanguard, Interactive Brokers)
 - [ ] Import transaction history
 

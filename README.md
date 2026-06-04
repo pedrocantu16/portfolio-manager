@@ -233,6 +233,28 @@ uv run portfolio tax-harvest Portfolio_Positions.csv --tax-rate 0.25 --min-loss 
 - Candidates for harvesting with alternative investments
 - Wash sale rule reminders
 
+## Exporting Data
+
+Most commands support exporting results to CSV or JSON files using `--export`:
+
+```bash
+# Export rebalancing trades to CSV
+uv run portfolio rebalance Portfolio_Positions.csv --export trades.csv
+
+# Export optimal weights to JSON
+uv run portfolio optimize Portfolio_Positions.csv --export weights.json
+
+# Export backtest results
+uv run portfolio backtest Portfolio_Positions.csv --export backtest.json
+
+# Export simulation results
+uv run portfolio simulate Portfolio_Positions.csv --export simulation.csv
+```
+
+**File format is determined by extension:**
+- `.csv` - Tabular data (trades, daily values, scenarios)
+- `.json` - Structured data with full metrics
+
 ## Return Estimation Methods
 
 ### Historical (default)
