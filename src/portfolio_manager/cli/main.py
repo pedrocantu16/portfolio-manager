@@ -13,6 +13,7 @@ from portfolio_manager.core.sectors import Sector, get_sectors_for_portfolio
 from portfolio_manager.core.tax import analyze_tax_loss_harvesting, get_wash_sale_alternatives
 from portfolio_manager.data.market import MarketDataFetcher
 from portfolio_manager.data.parsers.fidelity import FidelityParser
+from portfolio_manager.data.parsers.generic import GenericParser
 from portfolio_manager.metrics import (
     calculate_max_drawdown,
     calculate_portfolio_return,
@@ -56,10 +57,25 @@ def _get_portfolio() -> Portfolio:
     return _loaded_portfolio
 
 
+def _detect_parser(file_path: Path):
+    """Detect the appropriate parser for a file."""
+    parsers = [
+        ("Fidelity", FidelityParser()),
+        ("Generic", GenericParser()),
+    ]
+
+    for name, parser in parsers:
+        if parser.can_parse(file_path):
+            return name, parser
+
+    return None, None
+
+
 @app.command()
 def load(
     file_path: Annotated[Path, typer.Argument(help="Path to the CSV file to load")],
     account: Annotated[str | None, typer.Option(help="Account name")] = None,
+    format: Annotated[str | None, typer.Option(help="File format: fidelity, generic (auto-detect if not specified)")] = None,
 ) -> None:
     """Load a portfolio from a CSV file."""
     global _loaded_portfolio
@@ -68,12 +84,24 @@ def load(
         console.print(f"[red]File not found: {file_path}[/red]")
         raise typer.Exit(1)
 
-    parser = FidelityParser()
+    # Use specified format or auto-detect
+    if format:
+        format_map = {
+            "fidelity": ("Fidelity", FidelityParser()),
+            "generic": ("Generic", GenericParser()),
+        }
+        if format.lower() not in format_map:
+            console.print(f"[red]Unknown format: {format}[/red]")
+            console.print("Supported formats: fidelity, generic")
+            raise typer.Exit(1)
+        parser_name, parser = format_map[format.lower()]
+    else:
+        parser_name, parser = _detect_parser(file_path)
 
-    if not parser.can_parse(file_path):
-        console.print(
-            "[red]Unable to parse file. Only Fidelity CSV exports are supported.[/red]"
-        )
+    if parser is None:
+        console.print("[red]Unable to parse file.[/red]")
+        console.print("Supported formats: Fidelity CSV, Generic CSV")
+        console.print("Use 'portfolio template' to generate a sample generic CSV.")
         raise typer.Exit(1)
 
     try:
@@ -83,6 +111,7 @@ def load(
         _loaded_portfolio = portfolio
 
         console.print(f"[green]Loaded portfolio: {portfolio.name}[/green]")
+        console.print(f"  Format: {parser_name}")
         console.print(f"  Positions: {len(portfolio.get_investable_positions())}")
         console.print(f"  Total Value: ${portfolio.total_value:,.2f}")
 
@@ -1298,6 +1327,62 @@ def simulate(
         console.print(f"[green]Exported to {export}[/green]")
 
     console.print()
+
+
+@app.command()
+def template(
+    output: Annotated[
+        Path, typer.Argument(help="Output file path")
+    ] = Path("portfolio_template.csv"),
+    type: Annotated[
+        str, typer.Option(help="Template type: quantity, weight, or value")
+    ] = "quantity",
+) -> None:
+    """Generate a sample CSV template for portfolio import."""
+    templates = {
+        "quantity": """symbol,quantity,cost_basis,account
+AAPL,100,15000.00,Main
+VOO,50,20000.00,Main
+MSFT,25,8000.00,IRA
+GOOGL,10,12000.00,Main""",
+        "weight": """symbol,weight,account
+VOO,40,Main
+VXUS,20,Main
+BND,20,Main
+VNQ,10,Main
+GLD,10,Main""",
+        "value": """symbol,value,cost_basis,account
+AAPL,25000,20000,Main
+VOO,30000,28000,Main
+MSFT,15000,12000,IRA""",
+    }
+
+    if type.lower() not in templates:
+        console.print(f"[red]Unknown template type: {type}[/red]")
+        console.print("Options: quantity, weight, value")
+        raise typer.Exit(1)
+
+    content = templates[type.lower()]
+
+    with open(output, "w") as f:
+        f.write(content)
+
+    console.print(f"[green]Created template: {output}[/green]")
+    console.print()
+    console.print(f"[bold]Template type: {type}[/bold]")
+
+    if type.lower() == "quantity":
+        console.print("Columns: symbol, quantity, cost_basis (optional), account (optional)")
+        console.print("Prices will be fetched from Yahoo Finance automatically.")
+    elif type.lower() == "weight":
+        console.print("Columns: symbol, weight (as % like 40 or decimal like 0.40)")
+        console.print("Quantities calculated from current prices.")
+    else:
+        console.print("Columns: symbol, value (current $), cost_basis (optional)")
+        console.print("Useful when you know dollar amounts but not quantities.")
+
+    console.print()
+    console.print(f"Edit the file, then run: portfolio summary {output}")
 
 
 if __name__ == "__main__":
