@@ -28,6 +28,12 @@ from portfolio_manager.backtest import (
     run_monte_carlo,
 )
 from portfolio_manager.metrics.benchmark import BenchmarkAnalysis
+from portfolio_manager.export import (
+    export_backtest,
+    export_simulation,
+    export_trades,
+    export_weights,
+)
 from portfolio_manager.optimization import PortfolioOptimizer, ReturnEstimator
 from portfolio_manager.optimization.optimizer import Objective
 
@@ -318,6 +324,9 @@ def optimize(
     market_premium: Annotated[
         float, typer.Option(help="Market risk premium for CAPM (e.g., 0.05 = 5%)")
     ] = 0.05,
+    export: Annotated[
+        Path | None, typer.Option(help="Export results to file (.csv or .json)")
+    ] = None,
 ) -> None:
     """Find optimal portfolio allocation."""
     global _loaded_portfolio
@@ -494,6 +503,12 @@ def optimize(
     )
 
     console.print(comp_table)
+
+    # Export if requested
+    if export:
+        export_weights(result.weights, export, current_weights)
+        console.print(f"[green]Exported to {export}[/green]")
+
     console.print()
 
 
@@ -520,6 +535,9 @@ def rebalance(
     market_premium: Annotated[
         float, typer.Option(help="Market risk premium for CAPM (e.g., 0.05 = 5%)")
     ] = 0.05,
+    export: Annotated[
+        Path | None, typer.Option(help="Export trades to CSV file")
+    ] = None,
 ) -> None:
     """Show rebalancing trades to reach optimal allocation."""
     global _loaded_portfolio
@@ -683,6 +701,12 @@ def rebalance(
         console.print(f"  Total Trades:    ${costs.total_trade_value:,.0f}")
         console.print(f"  Spread Cost:     ${costs.total_spread_cost:,.2f}")
         console.print(f"  Total Cost:      ${costs.total_cost:,.2f} ({costs.cost_percent:.2f}%)")
+
+    # Export if requested
+    if export:
+        export_trades(trades, export)
+        console.print(f"[green]Exported trades to {export}[/green]")
+
     console.print()
 
 
@@ -994,6 +1018,9 @@ def backtest(
     vs: Annotated[
         str, typer.Option(help="Benchmark ticker symbol")
     ] = "SPY",
+    export: Annotated[
+        Path | None, typer.Option(help="Export results to file (.csv or .json)")
+    ] = None,
 ) -> None:
     """Backtest current portfolio weights over historical data."""
     global _loaded_portfolio
@@ -1111,6 +1138,12 @@ def backtest(
     console.print(f"  Start:             ${start_val:,.0f}")
     console.print(f"  End:               ${end_val:,.0f}")
     console.print(f"  Change:            ${end_val - start_val:+,.0f}")
+
+    # Export if requested
+    if export:
+        export_backtest(result, export, vs)
+        console.print(f"[green]Exported to {export}[/green]")
+
     console.print()
 
 
@@ -1128,6 +1161,9 @@ def simulate(
     period: Annotated[
         str, typer.Option(help="Historical data period for statistics")
     ] = "2y",
+    export: Annotated[
+        Path | None, typer.Option(help="Export results to file (.csv or .json)")
+    ] = None,
 ) -> None:
     """Monte Carlo simulation of future portfolio values."""
     global _loaded_portfolio
@@ -1255,6 +1291,12 @@ def simulate(
     console.print(f"  Value at Risk (95%):     ${result.var_95:,.0f}")
     console.print(f"  Expected Shortfall:      ${result.cvar_95:,.0f}")
     console.print(f"  Std Dev of Final Value:  ${result.final_std:,.0f}")
+
+    # Export if requested
+    if export:
+        export_simulation(result, export, cash_end, portfolio.total_value)
+        console.print(f"[green]Exported to {export}[/green]")
+
     console.print()
 
 
