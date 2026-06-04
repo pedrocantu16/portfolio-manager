@@ -9,6 +9,8 @@ A Python CLI for portfolio analysis and optimization. Fetches real market data f
 - **Portfolio Optimization**: Mean-variance optimization with multiple objectives
 - **Return Estimation**: Historical returns, CAPM, or shrinkage estimators
 - **Benchmark Comparison**: Compare vs S&P 500 or custom benchmark (alpha, beta, tracking error)
+- **Backtesting**: Test portfolio performance over historical data
+- **Monte Carlo Simulation**: Project future portfolio values with probability analysis
 - **Sector Analysis**: View sector allocation and concentration
 - **Tax-Loss Harvesting**: Identify opportunities to harvest losses and reduce taxes
 - **Transaction Costs**: Estimate spread and commission costs for rebalancing
@@ -158,6 +160,58 @@ uv run portfolio benchmark Portfolio_Positions.csv --vs QQQ --period 2y
 - Tracking error
 - Information ratio
 - Upside/downside capture ratios
+
+### `portfolio backtest <csv>`
+
+Test how the current portfolio weights would have performed historically.
+
+```bash
+# Backtest over 3 years with monthly rebalancing
+uv run portfolio backtest Portfolio_Positions.csv --period 3y
+
+# Backtest with quarterly rebalancing vs QQQ
+uv run portfolio backtest Portfolio_Positions.csv --rebalance quarterly --vs QQQ
+```
+
+**Options:**
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--period` | `3y` | Historical data period (2y, 3y, 5y) |
+| `--rebalance` | `monthly` | Rebalance frequency: daily, weekly, monthly, quarterly, yearly, none |
+| `--vs` | `SPY` | Benchmark ticker symbol |
+
+**Output includes:**
+- Total and annualized return
+- Volatility, Sharpe ratio, Sortino ratio
+- Max drawdown and duration
+- Comparison vs benchmark (alpha, beta)
+- Number of rebalances and total turnover
+
+### `portfolio simulate <csv>`
+
+Monte Carlo simulation projecting future portfolio values.
+
+```bash
+# Simulate 1 year (default)
+uv run portfolio simulate Portfolio_Positions.csv
+
+# Simulate 2 years with 5000 paths
+uv run portfolio simulate Portfolio_Positions.csv --days 504 --simulations 5000
+```
+
+**Options:**
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--days` | `252` | Days to simulate (252 = 1 year) |
+| `--simulations` | `1000` | Number of Monte Carlo paths |
+| `--period` | `2y` | Historical data period for statistics |
+
+**Output includes:**
+- Starting portfolio breakdown (invested vs cash)
+- Projected values at different percentiles (5th to 95th)
+- Cash grows at risk-free rate, invested portion simulated
+- Probability analysis (P(gain), P(lose 10%+), etc.)
+- Value at Risk (VaR) and Expected Shortfall
 
 ### `portfolio tax-harvest <csv>`
 

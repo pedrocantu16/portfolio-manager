@@ -70,10 +70,10 @@ uv run portfolio tax-harvest <csv> --tax-rate 0.25
 - [x] R-squared, Information ratio
 - [x] Upside/Downside capture ratios
 
-### Backtesting
-- [ ] Historical portfolio backtesting
-- [ ] Walk-forward optimization
-- [ ] Monte Carlo simulation
+### Backtesting ✅
+- [x] Historical portfolio backtesting
+- [x] Monte Carlo simulation
+- [ ] Walk-forward optimization (future)
 
 ### Data & Export
 - [ ] Export recommendations to CSV/JSON
