@@ -61,12 +61,14 @@ uv run portfolio tax-harvest <csv> --tax-rate 0.25
 
 ---
 
-## Phase 3: Advanced Features (Next)
+## Phase 3: Advanced Features (In Progress)
 
-### Benchmarking
-- [ ] Benchmark comparison (vs S&P 500, custom benchmark)
-- [ ] Alpha/Beta calculations
-- [ ] Tracking error
+### Benchmarking ✅
+- [x] Benchmark comparison (vs S&P 500, custom benchmark)
+- [x] Alpha/Beta calculations
+- [x] Tracking error
+- [x] R-squared, Information ratio
+- [x] Upside/Downside capture ratios
 
 ### Backtesting
 - [ ] Historical portfolio backtesting

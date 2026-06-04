@@ -8,6 +8,7 @@ A Python CLI for portfolio analysis and optimization. Fetches real market data f
 - **Risk Metrics**: Volatility, VaR, max drawdown, Sharpe/Sortino ratios
 - **Portfolio Optimization**: Mean-variance optimization with multiple objectives
 - **Return Estimation**: Historical returns, CAPM, or shrinkage estimators
+- **Benchmark Comparison**: Compare vs S&P 500 or custom benchmark (alpha, beta, tracking error)
 - **Sector Analysis**: View sector allocation and concentration
 - **Tax-Loss Harvesting**: Identify opportunities to harvest losses and reduce taxes
 - **Transaction Costs**: Estimate spread and commission costs for rebalancing
@@ -130,6 +131,33 @@ uv run portfolio sectors Portfolio_Positions.csv
 - Weight and value per sector
 - Number of positions per sector
 - List of holdings by sector
+
+### `portfolio benchmark <csv>`
+
+Compare portfolio performance against a benchmark (default: S&P 500).
+
+```bash
+# Compare vs S&P 500
+uv run portfolio benchmark Portfolio_Positions.csv
+
+# Compare vs NASDAQ (QQQ)
+uv run portfolio benchmark Portfolio_Positions.csv --vs QQQ --period 2y
+```
+
+**Options:**
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--vs` | `SPY` | Benchmark ticker symbol |
+| `--period` | `1y` | Historical data period |
+
+**Output includes:**
+- Annual return and volatility comparison
+- Beta (market sensitivity)
+- Alpha (risk-adjusted excess return)
+- R-squared (how much movement explained by benchmark)
+- Tracking error
+- Information ratio
+- Upside/downside capture ratios
 
 ### `portfolio tax-harvest <csv>`
 

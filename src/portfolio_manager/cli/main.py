@@ -22,6 +22,7 @@ from portfolio_manager.metrics import (
     calculate_sortino_ratio,
     calculate_var,
 )
+from portfolio_manager.metrics.benchmark import BenchmarkAnalysis
 from portfolio_manager.optimization import PortfolioOptimizer, ReturnEstimator
 from portfolio_manager.optimization.optimizer import Objective
 
@@ -823,6 +824,154 @@ def tax_harvest(
     console.print()
     console.print("[dim]Note: Alternatives are suggestions to avoid wash sale rule.[/dim]")
     console.print("[dim]Wait 30 days before repurchasing the same security.[/dim]")
+    console.print()
+
+
+@app.command()
+def benchmark(
+    file_path: Annotated[
+        Path | None, typer.Argument(help="Path to CSV file (optional if loaded)")
+    ] = None,
+    vs: Annotated[
+        str, typer.Option(help="Benchmark ticker symbol")
+    ] = "SPY",
+    period: Annotated[
+        str, typer.Option(help="Historical data period (1y, 2y, 3y, 5y)")
+    ] = "1y",
+) -> None:
+    """Compare portfolio performance against a benchmark."""
+    global _loaded_portfolio
+
+    if file_path:
+        load(file_path)
+
+    portfolio = _get_portfolio()
+
+    console.print()
+    console.print(f"[bold]Benchmark Comparison vs {vs}[/bold]")
+    console.print("─" * 50)
+
+    symbols = portfolio.get_symbols(include_cash=False)
+    if not symbols:
+        console.print("[yellow]No investable positions to analyze.[/yellow]")
+        return
+
+    console.print("[dim]Fetching market data...[/dim]")
+    fetcher = MarketDataFetcher()
+
+    try:
+        # Fetch portfolio assets and benchmark
+        all_symbols = symbols + [vs]
+        prices = fetcher.get_historical_prices(all_symbols, period=period)
+        risk_free_rate = fetcher.get_risk_free_rate()
+    except Exception as e:
+        console.print(f"[red]Error fetching market data: {e}[/red]")
+        raise typer.Exit(1)
+
+    if vs not in prices.columns:
+        console.print(f"[red]Benchmark {vs} not found.[/red]")
+        raise typer.Exit(1)
+
+    # Filter to available symbols
+    available_symbols = [s for s in symbols if s in prices.columns]
+    missing_symbols = set(symbols) - set(available_symbols)
+    if missing_symbols:
+        console.print(f"[yellow]Warning: No data for: {', '.join(missing_symbols)}[/yellow]")
+
+    returns = calculate_returns(prices)
+
+    # Calculate portfolio returns
+    weights = portfolio.get_weights(include_cash=False)
+    total_weight = sum(weights.get(s, 0) for s in available_symbols)
+    if total_weight > 0:
+        weights = {s: weights.get(s, 0) / total_weight for s in available_symbols}
+
+    portfolio_returns = sum(
+        returns[s] * weights.get(s, 0)
+        for s in available_symbols
+        if s in returns.columns
+    )
+    benchmark_returns = returns[vs]
+
+    # Run benchmark analysis
+    analysis = BenchmarkAnalysis(
+        portfolio_returns=portfolio_returns,
+        benchmark_returns=benchmark_returns,
+        benchmark_symbol=vs,
+        risk_free_rate=risk_free_rate,
+    )
+    results = analysis.run()
+
+    # Portfolio vs benchmark returns
+    port_annual = portfolio_returns.mean() * 252
+    bench_annual = benchmark_returns.mean() * 252
+    port_vol = portfolio_returns.std() * (252 ** 0.5)
+    bench_vol = benchmark_returns.std() * (252 ** 0.5)
+
+    console.print()
+    console.print("[bold]Performance:[/bold]")
+
+    perf_table = Table(show_header=True)
+    perf_table.add_column("Metric")
+    perf_table.add_column("Portfolio", justify="right")
+    perf_table.add_column(vs, justify="right")
+    perf_table.add_column("Difference", justify="right")
+
+    ret_diff = port_annual - bench_annual
+    ret_style = "green" if ret_diff > 0 else "red"
+    perf_table.add_row(
+        "Annual Return",
+        f"{port_annual*100:.1f}%",
+        f"{bench_annual*100:.1f}%",
+        f"[{ret_style}]{ret_diff*100:+.1f}%[/{ret_style}]",
+    )
+
+    vol_diff = port_vol - bench_vol
+    vol_style = "red" if vol_diff > 0 else "green"
+    perf_table.add_row(
+        "Volatility",
+        f"{port_vol*100:.1f}%",
+        f"{bench_vol*100:.1f}%",
+        f"[{vol_style}]{vol_diff*100:+.1f}%[/{vol_style}]",
+    )
+
+    console.print(perf_table)
+
+    # Benchmark metrics
+    console.print()
+    console.print("[bold]Risk Metrics:[/bold]")
+
+    beta = results["beta"]
+    alpha = results["alpha"]
+    tracking_error = results["tracking_error"]
+    info_ratio = results["information_ratio"]
+    r_squared = results["r_squared"]
+    upside, downside = results["upside_capture"], results["downside_capture"]
+
+    # Beta interpretation
+    if beta > 1.1:
+        beta_note = "more volatile than market"
+    elif beta < 0.9:
+        beta_note = "less volatile than market"
+    else:
+        beta_note = "moves with market"
+
+    # Alpha interpretation
+    alpha_style = "green" if alpha > 0 else "red"
+    alpha_note = "outperforming" if alpha > 0 else "underperforming"
+
+    console.print(f"  Beta:              {beta:.2f} ({beta_note})")
+    console.print(f"  Alpha:             [{alpha_style}]{alpha*100:+.2f}%[/{alpha_style}] ({alpha_note})")
+    console.print(f"  R-squared:         {r_squared:.2f} ({r_squared*100:.0f}% explained by {vs})")
+    console.print(f"  Tracking Error:    {tracking_error*100:.1f}%")
+    console.print(f"  Information Ratio: {info_ratio:.2f}")
+    console.print()
+
+    console.print("[bold]Capture Ratios:[/bold]")
+    up_style = "green" if upside > 100 else "yellow"
+    down_style = "green" if downside < 100 else "yellow"
+    console.print(f"  Upside Capture:    [{up_style}]{upside:.0f}%[/{up_style}]")
+    console.print(f"  Downside Capture:  [{down_style}]{downside:.0f}%[/{down_style}]")
     console.print()
 
 
