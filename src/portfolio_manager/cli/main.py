@@ -22,6 +22,11 @@ from portfolio_manager.metrics import (
     calculate_sortino_ratio,
     calculate_var,
 )
+from portfolio_manager.backtest import (
+    RebalanceFrequency,
+    run_backtest,
+    run_monte_carlo,
+)
 from portfolio_manager.metrics.benchmark import BenchmarkAnalysis
 from portfolio_manager.optimization import PortfolioOptimizer, ReturnEstimator
 from portfolio_manager.optimization.optimizer import Objective
@@ -972,6 +977,284 @@ def benchmark(
     down_style = "green" if downside < 100 else "yellow"
     console.print(f"  Upside Capture:    [{up_style}]{upside:.0f}%[/{up_style}]")
     console.print(f"  Downside Capture:  [{down_style}]{downside:.0f}%[/{down_style}]")
+    console.print()
+
+
+@app.command()
+def backtest(
+    file_path: Annotated[
+        Path | None, typer.Argument(help="Path to CSV file (optional if loaded)")
+    ] = None,
+    period: Annotated[
+        str, typer.Option(help="Historical data period (2y, 3y, 5y)")
+    ] = "3y",
+    rebalance: Annotated[
+        str, typer.Option(help="Rebalance frequency: daily, weekly, monthly, quarterly, yearly, none")
+    ] = "monthly",
+    vs: Annotated[
+        str, typer.Option(help="Benchmark ticker symbol")
+    ] = "SPY",
+) -> None:
+    """Backtest current portfolio weights over historical data."""
+    global _loaded_portfolio
+
+    if file_path:
+        load(file_path)
+
+    portfolio = _get_portfolio()
+
+    console.print()
+    console.print(f"[bold]Portfolio Backtest ({period})[/bold]")
+    console.print("─" * 50)
+
+    symbols = portfolio.get_symbols(include_cash=False)
+    if not symbols:
+        console.print("[yellow]No investable positions to backtest.[/yellow]")
+        return
+
+    # Map rebalance string to enum
+    rebal_map = {
+        "daily": RebalanceFrequency.DAILY,
+        "weekly": RebalanceFrequency.WEEKLY,
+        "monthly": RebalanceFrequency.MONTHLY,
+        "quarterly": RebalanceFrequency.QUARTERLY,
+        "yearly": RebalanceFrequency.YEARLY,
+        "none": RebalanceFrequency.NONE,
+    }
+    rebal_freq = rebal_map.get(rebalance.lower(), RebalanceFrequency.MONTHLY)
+
+    console.print("[dim]Fetching market data...[/dim]")
+    fetcher = MarketDataFetcher()
+
+    try:
+        all_symbols = symbols + [vs]
+        prices = fetcher.get_historical_prices(all_symbols, period=period)
+        risk_free_rate = fetcher.get_risk_free_rate()
+    except Exception as e:
+        console.print(f"[red]Error fetching market data: {e}[/red]")
+        raise typer.Exit(1)
+
+    # Filter to available symbols
+    available = [s for s in symbols if s in prices.columns]
+    missing = set(symbols) - set(available)
+    if missing:
+        console.print(f"[yellow]Warning: No data for: {', '.join(missing)}[/yellow]")
+
+    # Get current weights
+    weights = portfolio.get_weights(include_cash=False)
+    total_weight = sum(weights.get(s, 0) for s in available)
+    if total_weight > 0:
+        weights = {s: weights.get(s, 0) / total_weight for s in available}
+
+    # Get benchmark prices
+    benchmark_prices = prices[vs] if vs in prices.columns else None
+
+    console.print(f"[dim]Running backtest with {rebal_freq.value} rebalancing...[/dim]")
+
+    try:
+        result = run_backtest(
+            prices=prices[available],
+            target_weights=weights,
+            initial_value=portfolio.invested_value,
+            rebalance_frequency=rebal_freq,
+            benchmark_prices=benchmark_prices,
+            risk_free_rate=risk_free_rate,
+        )
+    except Exception as e:
+        console.print(f"[red]Backtest error: {e}[/red]")
+        raise typer.Exit(1)
+
+    # Display results
+    console.print()
+    console.print("[bold]Performance Summary:[/bold]")
+
+    ret_style = "green" if result.total_return > 0 else "red"
+    console.print(f"  Total Return:      [{ret_style}]{result.total_return*100:+.1f}%[/{ret_style}]")
+    console.print(f"  Annualized Return: [{ret_style}]{result.annualized_return*100:+.1f}%[/{ret_style}]")
+    console.print(f"  Volatility:        {result.volatility*100:.1f}%")
+    console.print(f"  Sharpe Ratio:      {result.sharpe_ratio:.2f}")
+    console.print(f"  Sortino Ratio:     {result.sortino_ratio:.2f}")
+    console.print(f"  Max Drawdown:      [red]{result.max_drawdown*100:.1f}%[/red]")
+    console.print(f"  Max DD Duration:   {result.max_drawdown_duration} days")
+    console.print()
+
+    # Benchmark comparison
+    if result.benchmark_return is not None:
+        console.print(f"[bold]vs {vs}:[/bold]")
+
+        bench_style = "green" if result.benchmark_return > 0 else "red"
+        console.print(f"  Benchmark Return:  [{bench_style}]{result.benchmark_return*100:+.1f}%[/{bench_style}]")
+
+        excess = result.total_return - result.benchmark_return
+        excess_style = "green" if excess > 0 else "red"
+        console.print(f"  Excess Return:     [{excess_style}]{excess*100:+.1f}%[/{excess_style}]")
+
+        if result.alpha is not None:
+            alpha_style = "green" if result.alpha > 0 else "red"
+            console.print(f"  Alpha:             [{alpha_style}]{result.alpha*100:+.2f}%[/{alpha_style}]")
+
+        if result.beta is not None:
+            console.print(f"  Beta:              {result.beta:.2f}")
+
+        console.print()
+
+    # Trading statistics
+    console.print("[bold]Trading:[/bold]")
+    console.print(f"  Rebalances:        {result.num_rebalances}")
+    console.print(f"  Total Turnover:    {result.total_turnover*100:.1f}%")
+    console.print()
+
+    # Value progression
+    console.print("[bold]Value Progression:[/bold]")
+    start_val = result.portfolio_values.iloc[0]
+    end_val = result.portfolio_values.iloc[-1]
+    console.print(f"  Start:             ${start_val:,.0f}")
+    console.print(f"  End:               ${end_val:,.0f}")
+    console.print(f"  Change:            ${end_val - start_val:+,.0f}")
+    console.print()
+
+
+@app.command()
+def simulate(
+    file_path: Annotated[
+        Path | None, typer.Argument(help="Path to CSV file (optional if loaded)")
+    ] = None,
+    days: Annotated[
+        int, typer.Option(help="Days to simulate (252 = 1 year)")
+    ] = 252,
+    simulations: Annotated[
+        int, typer.Option(help="Number of Monte Carlo simulations")
+    ] = 1000,
+    period: Annotated[
+        str, typer.Option(help="Historical data period for statistics")
+    ] = "2y",
+) -> None:
+    """Monte Carlo simulation of future portfolio values."""
+    global _loaded_portfolio
+
+    if file_path:
+        load(file_path)
+
+    portfolio = _get_portfolio()
+
+    console.print()
+    console.print(f"[bold]Monte Carlo Simulation ({simulations:,} paths, {days} days)[/bold]")
+    console.print("─" * 50)
+
+    symbols = portfolio.get_symbols(include_cash=False)
+    if not symbols:
+        console.print("[yellow]No investable positions to simulate.[/yellow]")
+        return
+
+    console.print("[dim]Fetching market data...[/dim]")
+    fetcher = MarketDataFetcher()
+
+    try:
+        prices = fetcher.get_historical_prices(symbols, period=period)
+        risk_free_rate = fetcher.get_risk_free_rate()
+    except Exception as e:
+        console.print(f"[red]Error fetching market data: {e}[/red]")
+        raise typer.Exit(1)
+
+    available = [s for s in symbols if s in prices.columns]
+    missing = set(symbols) - set(available)
+    if missing:
+        console.print(f"[yellow]Warning: No data for: {', '.join(missing)}[/yellow]")
+
+    returns = calculate_returns(prices[available])
+
+    # Get weights
+    weights = portfolio.get_weights(include_cash=False)
+    total_weight = sum(weights.get(s, 0) for s in available)
+    if total_weight > 0:
+        weights = {s: weights.get(s, 0) / total_weight for s in available}
+
+    console.print(f"[dim]Running {simulations:,} simulations...[/dim]")
+
+    try:
+        result = run_monte_carlo(
+            weights=weights,
+            returns=returns,
+            initial_value=portfolio.invested_value,
+            days=days,
+            num_simulations=simulations,
+            seed=42,  # For reproducibility
+        )
+    except Exception as e:
+        console.print(f"[red]Simulation error: {e}[/red]")
+        raise typer.Exit(1)
+
+    # Calculate cash growth at risk-free rate
+    years = days / 252
+    cash_start = portfolio.cash
+    cash_end = cash_start * (1 + risk_free_rate) ** years
+
+    # Display portfolio breakdown
+    console.print()
+    console.print("[bold]Starting Portfolio:[/bold]")
+    console.print(f"  Invested (at risk):  ${portfolio.invested_value:,.0f}")
+    console.print(f"  Cash (risk-free):    ${cash_start:,.0f}")
+    console.print(f"  Total:               ${portfolio.total_value:,.0f}")
+    console.print()
+
+    # Show projected values
+    console.print(f"[bold]Projected Values ({years:.1f} year{'s' if years != 1 else ''}):[/bold]")
+    console.print(f"  [dim]Cash grows at {risk_free_rate*100:.1f}% risk-free rate → ${cash_end:,.0f}[/dim]")
+    console.print()
+
+    # Show percentiles (invested + cash)
+    table = Table(show_header=True)
+    table.add_column("Scenario")
+    table.add_column("Invested", justify="right")
+    table.add_column("+ Cash", justify="right")
+    table.add_column("= Total", justify="right")
+    table.add_column("Return", justify="right")
+
+    init_total = portfolio.total_value
+    scenarios = [
+        ("Best Case (95th)", result.percentile_95.iloc[-1]),
+        ("Optimistic (75th)", result.percentile_75.iloc[-1]),
+        ("Median (50th)", result.final_median),
+        ("Mean", result.final_mean),
+        ("Pessimistic (25th)", result.percentile_25.iloc[-1]),
+        ("Worst Case (5th)", result.percentile_5.iloc[-1]),
+    ]
+
+    for name, invested_value in scenarios:
+        total_value = invested_value + cash_end
+        ret = (total_value / init_total - 1) * 100
+        ret_style = "green" if ret > 0 else "red"
+        table.add_row(
+            name,
+            f"${invested_value:,.0f}",
+            f"${cash_end:,.0f}",
+            f"${total_value:,.0f}",
+            f"[{ret_style}]{ret:+.1f}%[/{ret_style}]",
+        )
+
+    console.print(table)
+    console.print()
+
+    # Probability metrics (on invested portion)
+    console.print("[bold]Probability Analysis (invested portion):[/bold]")
+
+    prob_style = "green" if result.prob_positive_return > 0.5 else "yellow"
+    console.print(f"  P(gain):           [{prob_style}]{result.prob_positive_return*100:.1f}%[/{prob_style}]")
+
+    if result.prob_double > 0.01:
+        console.print(f"  P(double):         {result.prob_double*100:.1f}%")
+
+    loss10_style = "green" if result.prob_loss_10pct < 0.2 else "red"
+    loss20_style = "green" if result.prob_loss_20pct < 0.1 else "red"
+    console.print(f"  P(lose 10%+):      [{loss10_style}]{result.prob_loss_10pct*100:.1f}%[/{loss10_style}]")
+    console.print(f"  P(lose 20%+):      [{loss20_style}]{result.prob_loss_20pct*100:.1f}%[/{loss20_style}]")
+    console.print()
+
+    # Risk metrics
+    console.print("[bold]Risk Metrics (invested portion):[/bold]")
+    console.print(f"  Value at Risk (95%):     ${result.var_95:,.0f}")
+    console.print(f"  Expected Shortfall:      ${result.cvar_95:,.0f}")
+    console.print(f"  Std Dev of Final Value:  ${result.final_std:,.0f}")
     console.print()
 
 
