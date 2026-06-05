@@ -55,6 +55,17 @@ uv sync
 
 ## Quick Start
 
+### Web App (Streamlit)
+
+```bash
+# Launch the web interface
+uv run streamlit run src/portfolio_manager/web/app.py
+```
+
+Then open http://localhost:8501 in your browser and upload a portfolio CSV.
+
+### CLI
+
 ```bash
 # View portfolio summary
 uv run portfolio summary Portfolio_Positions.csv

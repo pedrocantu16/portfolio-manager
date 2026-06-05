@@ -90,19 +90,45 @@ portfolio export <csv> --format csv
 
 ---
 
-## Phase 4: Web UI (Future)
+## Phase 4a: Streamlit MVP (In Progress)
 
-### Backend
-- [ ] FastAPI backend exposing core functionality
-- [ ] REST API endpoints for portfolio operations
-- [ ] WebSocket for real-time updates
-- [ ] User authentication
+### Core Features
+- [x] Streamlit dashboard with portfolio summary
+- [x] CSV file upload (Fidelity or generic format)
+- [x] Allocation pie chart
+- [x] Risk/return metrics display
+- [x] Interactive optimization with sliders
+- [x] Backtest visualization with performance chart
+- [x] Monte Carlo projection fan chart
 
-### Frontend
-- [ ] React or Streamlit dashboard
-- [ ] Interactive charts (allocation pie, performance line)
-- [ ] Optimization visualization (efficient frontier)
-- [ ] Real-time price updates
+### Multi-user Support
+- [ ] SQLite database for portfolio storage
+- [ ] User authentication (streamlit-authenticator)
+- [ ] Save/load portfolios per user
+
+### Deployment
+- [ ] Docker container
+- [ ] Streamlit Cloud or self-hosted
+
+---
+
+## Phase 4b: FastAPI Backend (Future)
+
+- [ ] FastAPI REST API exposing core functionality
+- [ ] PostgreSQL database for production
+- [ ] User authentication with JWT
+- [ ] API endpoints: `/portfolios`, `/optimize`, `/backtest`, `/simulate`
+- [ ] Rate limiting and security
+
+---
+
+## Phase 4c: React Frontend (Future)
+
+- [ ] React/Next.js frontend
+- [ ] Polished UI with Tailwind or similar
+- [ ] Real-time price updates via WebSocket
+- [ ] Efficient frontier visualization
+- [ ] Mobile-responsive design
 
 ---
 

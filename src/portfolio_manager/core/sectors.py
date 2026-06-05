@@ -19,6 +19,9 @@ class Sector(StrEnum):
     MATERIALS = "Materials"
     REAL_ESTATE = "Real Estate"
     COMMUNICATION = "Communication Services"
+    DIVERSIFIED = "Diversified"
+    FIXED_INCOME = "Fixed Income"
+    COMMODITIES = "Commodities"
     UNKNOWN = "Unknown"
 
 
@@ -114,15 +117,40 @@ SECTOR_MAP: dict[str, Sector] = {
     "ECL": Sector.MATERIALS,
 }
 
-# ETF sector mappings (broad market ETFs are diversified)
-ETF_SECTOR_MAP: dict[str, Sector | None] = {
-    "SPY": None,  # Diversified
-    "VOO": None,
-    "IVV": None,
-    "VTI": None,
-    "QQQ": Sector.TECHNOLOGY,  # Tech-heavy
-    "VXUS": None,  # International diversified
+# ETF sector mappings
+ETF_SECTOR_MAP: dict[str, Sector] = {
+    # Broad market / Diversified
+    "SPY": Sector.DIVERSIFIED,
+    "VOO": Sector.DIVERSIFIED,
+    "IVV": Sector.DIVERSIFIED,
+    "VTI": Sector.DIVERSIFIED,
+    "VXUS": Sector.DIVERSIFIED,
+    "VEA": Sector.DIVERSIFIED,
+    "VWO": Sector.DIVERSIFIED,
+    "EFA": Sector.DIVERSIFIED,
+    "EEM": Sector.DIVERSIFIED,
+    "SCHD": Sector.DIVERSIFIED,
+    "VIG": Sector.DIVERSIFIED,
+    "VYM": Sector.DIVERSIFIED,
+    "ARKK": Sector.DIVERSIFIED,
+    "VUG": Sector.DIVERSIFIED,
+    "VTV": Sector.DIVERSIFIED,
+    "IJH": Sector.DIVERSIFIED,
+    "IJR": Sector.DIVERSIFIED,
+    "IWM": Sector.DIVERSIFIED,
+    # Technology
+    "QQQ": Sector.TECHNOLOGY,
     "XLK": Sector.TECHNOLOGY,
+    "VGT": Sector.TECHNOLOGY,
+    "XSD": Sector.TECHNOLOGY,  # Semiconductors
+    "SMH": Sector.TECHNOLOGY,  # Semiconductors
+    "SOXX": Sector.TECHNOLOGY,  # Semiconductors
+    "QTUM": Sector.TECHNOLOGY,  # Quantum computing / AI
+    "BOTZ": Sector.TECHNOLOGY,  # Robotics / AI
+    "ROBO": Sector.TECHNOLOGY,  # Robotics
+    "ARTY": Sector.TECHNOLOGY,  # AI / Tech
+    "AIQ": Sector.TECHNOLOGY,  # AI
+    # Sector ETFs
     "XLF": Sector.FINANCIALS,
     "XLE": Sector.ENERGY,
     "XLV": Sector.HEALTHCARE,
@@ -132,8 +160,36 @@ ETF_SECTOR_MAP: dict[str, Sector | None] = {
     "XLU": Sector.UTILITIES,
     "XLRE": Sector.REAL_ESTATE,
     "XLC": Sector.COMMUNICATION,
-    "IBIT": Sector.FINANCIALS,  # Bitcoin ETF
+    "XLB": Sector.MATERIALS,
+    # Real Estate
+    "VNQ": Sector.REAL_ESTATE,
+    "VNQI": Sector.REAL_ESTATE,
+    "IYR": Sector.REAL_ESTATE,
+    "REIT": Sector.REAL_ESTATE,
+    # Fixed Income / Bonds
+    "BND": Sector.FIXED_INCOME,
+    "AGG": Sector.FIXED_INCOME,
+    "TLT": Sector.FIXED_INCOME,
+    "LQD": Sector.FIXED_INCOME,
+    "HYG": Sector.FIXED_INCOME,
+    "VCIT": Sector.FIXED_INCOME,
+    "VCSH": Sector.FIXED_INCOME,
+    "VGSH": Sector.FIXED_INCOME,
+    "SHY": Sector.FIXED_INCOME,
+    "IEF": Sector.FIXED_INCOME,
+    "TIP": Sector.FIXED_INCOME,
+    # Commodities
+    "GLD": Sector.COMMODITIES,
+    "SLV": Sector.COMMODITIES,
+    "IAU": Sector.COMMODITIES,
+    "PDBC": Sector.COMMODITIES,
+    "DBC": Sector.COMMODITIES,
+    "USO": Sector.COMMODITIES,
+    "UNG": Sector.COMMODITIES,
+    # Crypto ETFs
+    "IBIT": Sector.FINANCIALS,
     "GBTC": Sector.FINANCIALS,
+    "ETHE": Sector.FINANCIALS,
 }
 
 
@@ -152,8 +208,7 @@ def get_sector(symbol: str, use_api: bool = False) -> Sector:
         return SECTOR_MAP[symbol]
 
     if symbol in ETF_SECTOR_MAP:
-        sector = ETF_SECTOR_MAP[symbol]
-        return sector if sector else Sector.UNKNOWN
+        return ETF_SECTOR_MAP[symbol]
 
     # Try Yahoo Finance API
     if use_api:
