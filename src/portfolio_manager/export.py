@@ -148,6 +148,66 @@ def export_backtest(
         export_to_csv(rows, path)
 
 
+def export_walk_forward(
+    result: Any,
+    path: Path,
+) -> None:
+    """Export walk-forward optimization results to CSV or JSON.
+
+    Args:
+        result: WalkForwardResult object.
+        path: Output file path.
+    """
+    if path.suffix.lower() == ".json":
+        data = {
+            "summary": {
+                "num_windows": len(result.windows),
+                "avg_train_sharpe": result.avg_train_sharpe,
+                "avg_test_sharpe": result.avg_test_sharpe,
+                "avg_sharpe_decay": result.avg_sharpe_decay,
+                "avg_sharpe_decay_pct": result.avg_sharpe_decay_pct,
+                "avg_train_return": result.avg_train_return,
+                "avg_test_return": result.avg_test_return,
+                "total_oos_return": result.total_oos_return,
+                "oos_sharpe": result.oos_sharpe,
+                "overfitting_score": result.overfitting_score,
+                "consistency_score": result.consistency_score,
+            },
+            "windows": [
+                {
+                    "window": w.window_num,
+                    "train_period": f"{w.train_start.date()} to {w.train_end.date()}",
+                    "test_period": f"{w.test_start.date()} to {w.test_end.date()}",
+                    "train_sharpe": w.train_sharpe,
+                    "test_sharpe": w.test_sharpe,
+                    "sharpe_decay": w.sharpe_decay,
+                    "train_return": w.train_return,
+                    "test_return": w.test_return,
+                    "weights": w.optimal_weights,
+                }
+                for w in result.windows
+            ],
+        }
+        export_to_json(data, path)
+    else:
+        rows = [
+            {
+                "window": w.window_num,
+                "train_start": str(w.train_start.date()),
+                "train_end": str(w.train_end.date()),
+                "test_start": str(w.test_start.date()),
+                "test_end": str(w.test_end.date()),
+                "train_sharpe": round(w.train_sharpe, 3),
+                "test_sharpe": round(w.test_sharpe, 3),
+                "sharpe_decay": round(w.sharpe_decay, 3),
+                "train_return": round(w.train_return, 4),
+                "test_return": round(w.test_return, 4),
+            }
+            for w in result.windows
+        ]
+        export_to_csv(rows, path)
+
+
 def export_simulation(
     result: Any,
     path: Path,

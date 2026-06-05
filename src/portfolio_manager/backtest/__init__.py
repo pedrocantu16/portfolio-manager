@@ -10,12 +10,20 @@ from portfolio_manager.backtest.montecarlo import (
     run_monte_carlo,
     run_monte_carlo_correlated,
 )
+from portfolio_manager.backtest.walkforward import (
+    WalkForwardResult,
+    WalkForwardWindow,
+    run_walk_forward,
+)
 
 __all__ = [
     "BacktestResult",
     "MonteCarloResult",
     "RebalanceFrequency",
+    "WalkForwardResult",
+    "WalkForwardWindow",
     "run_backtest",
     "run_monte_carlo",
     "run_monte_carlo_correlated",
+    "run_walk_forward",
 ]

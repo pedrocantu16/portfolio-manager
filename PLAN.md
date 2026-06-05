@@ -73,7 +73,7 @@ uv run portfolio tax-harvest <csv> --tax-rate 0.25
 ### Backtesting ✅
 - [x] Historical portfolio backtesting
 - [x] Monte Carlo simulation
-- [ ] Walk-forward optimization (future)
+- [x] Walk-forward optimization
 
 ### Data & Export ✅
 - [x] Export recommendations to CSV/JSON

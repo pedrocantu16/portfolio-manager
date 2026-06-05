@@ -11,6 +11,7 @@ A Python CLI for portfolio analysis and optimization. Fetches real market data f
 - **Benchmark Comparison**: Compare vs S&P 500 or custom benchmark (alpha, beta, tracking error)
 - **Backtesting**: Test portfolio performance over historical data
 - **Monte Carlo Simulation**: Project future portfolio values with probability analysis
+- **Walk-Forward Optimization**: Validate strategy robustness with out-of-sample testing
 - **Sector Analysis**: View sector allocation and concentration
 - **Tax-Loss Harvesting**: Identify opportunities to harvest losses and reduce taxes
 - **Transaction Costs**: Estimate spread and commission costs for rebalancing
@@ -235,6 +236,34 @@ uv run portfolio simulate Portfolio_Positions.csv --days 504 --simulations 5000
 - Probability analysis (P(gain), P(lose 10%+), etc.)
 - Value at Risk (VaR) and Expected Shortfall
 
+### `portfolio walkforward <csv>`
+
+Walk-forward optimization to validate that your optimization strategy works out-of-sample.
+
+```bash
+# Default: 12-month train, 3-month test windows
+uv run portfolio walkforward Portfolio_Positions.csv
+
+# Custom windows and objective
+uv run portfolio walkforward Portfolio_Positions.csv --train 6 --test 2 --objective min_volatility
+```
+
+**Options:**
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--train` | `12` | Training window in months |
+| `--test` | `3` | Test window in months |
+| `--objective` | `max_sharpe` | Optimization objective: `max_sharpe`, `min_volatility` |
+| `--max-position` | `0.30` | Maximum weight per position |
+| `--method` | `historical` | Return estimation: `historical` or `capm` |
+
+**Output includes:**
+- Per-window train vs test Sharpe ratios
+- Sharpe decay (performance drop out-of-sample)
+- Total out-of-sample return
+- Overfitting score (0-100%, lower is better)
+- Consistency score (% of windows with positive test Sharpe)
+
 ### `portfolio tax-harvest <csv>`
 
 Analyze tax-loss harvesting opportunities.
@@ -271,6 +300,9 @@ uv run portfolio backtest Portfolio_Positions.csv --export backtest.json
 
 # Export simulation results
 uv run portfolio simulate Portfolio_Positions.csv --export simulation.csv
+
+# Export walk-forward results
+uv run portfolio walkforward Portfolio_Positions.csv --export walkforward.json
 ```
 
 **File format is determined by extension:**

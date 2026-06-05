@@ -27,12 +27,14 @@ from portfolio_manager.backtest import (
     RebalanceFrequency,
     run_backtest,
     run_monte_carlo,
+    run_walk_forward,
 )
 from portfolio_manager.metrics.benchmark import BenchmarkAnalysis
 from portfolio_manager.export import (
     export_backtest,
     export_simulation,
     export_trades,
+    export_walk_forward,
     export_weights,
 )
 from portfolio_manager.optimization import PortfolioOptimizer, ReturnEstimator
@@ -1324,6 +1326,182 @@ def simulate(
     # Export if requested
     if export:
         export_simulation(result, export, cash_end, portfolio.total_value)
+        console.print(f"[green]Exported to {export}[/green]")
+
+    console.print()
+
+
+@app.command()
+def walkforward(
+    file_path: Annotated[
+        Path | None, typer.Argument(help="Path to CSV file (optional if loaded)")
+    ] = None,
+    train: Annotated[
+        int, typer.Option(help="Training window in months")
+    ] = 12,
+    test: Annotated[
+        int, typer.Option(help="Test window in months")
+    ] = 3,
+    objective: Annotated[
+        str, typer.Option(help="Optimization objective: max_sharpe, min_volatility")
+    ] = "max_sharpe",
+    max_position: Annotated[
+        float, typer.Option(help="Maximum weight per position (0.0-1.0)")
+    ] = 0.30,
+    method: Annotated[
+        str, typer.Option(help="Return estimate: historical or capm")
+    ] = "historical",
+    export: Annotated[
+        Path | None, typer.Option(help="Export results to file (.csv or .json)")
+    ] = None,
+) -> None:
+    """Walk-forward optimization to validate strategy robustness."""
+    global _loaded_portfolio
+
+    if file_path:
+        load(file_path)
+
+    portfolio = _get_portfolio()
+
+    console.print()
+    console.print(f"[bold]Walk-Forward Optimization ({train}mo train / {test}mo test)[/bold]")
+    console.print("─" * 50)
+
+    symbols = portfolio.get_symbols(include_cash=False)
+    if not symbols:
+        console.print("[yellow]No investable positions to analyze.[/yellow]")
+        return
+
+    # Map objective string to enum
+    obj_map = {
+        "max_sharpe": Objective.MAX_SHARPE,
+        "min_volatility": Objective.MIN_VOLATILITY,
+        "min_vol": Objective.MIN_VOLATILITY,
+    }
+    obj = obj_map.get(objective.lower(), Objective.MAX_SHARPE)
+
+    # Map return method
+    method_map = {
+        "historical": ReturnEstimator.HISTORICAL,
+        "capm": ReturnEstimator.CAPM,
+    }
+    return_method = method_map.get(method.lower(), ReturnEstimator.HISTORICAL)
+
+    # Need enough data: train + test windows, at least 2 windows
+    min_months = (train + test) * 2
+    period = f"{max(min_months // 12 + 1, 3)}y"
+
+    console.print(f"[dim]Fetching {period} of market data...[/dim]")
+    fetcher = MarketDataFetcher()
+
+    try:
+        all_symbols = symbols + (["SPY"] if return_method == ReturnEstimator.CAPM else [])
+        prices = fetcher.get_historical_prices(all_symbols, period=period)
+        risk_free_rate = fetcher.get_risk_free_rate()
+    except Exception as e:
+        console.print(f"[red]Error fetching market data: {e}[/red]")
+        raise typer.Exit(1)
+
+    available = [s for s in symbols if s in prices.columns]
+    missing = set(symbols) - set(available)
+    if missing:
+        console.print(f"[yellow]Warning: No data for: {', '.join(missing)}[/yellow]")
+
+    if len(available) < 2:
+        console.print("[red]Need at least 2 assets for optimization.[/red]")
+        raise typer.Exit(1)
+
+    market_prices = prices["SPY"] if "SPY" in prices.columns else None
+
+    console.print(f"[dim]Running walk-forward analysis ({obj.value})...[/dim]")
+
+    try:
+        result = run_walk_forward(
+            prices=prices[available],
+            train_months=train,
+            test_months=test,
+            objective=obj,
+            min_weight=0.0,
+            max_weight=max_position,
+            risk_free_rate=risk_free_rate,
+            return_method=return_method,
+            market_prices=market_prices,
+        )
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+    except Exception as e:
+        console.print(f"[red]Walk-forward error: {e}[/red]")
+        raise typer.Exit(1)
+
+    # Display per-window results
+    console.print()
+    console.print(f"[bold]Window Results ({len(result.windows)} windows):[/bold]")
+
+    table = Table(show_header=True)
+    table.add_column("Window")
+    table.add_column("Test Period")
+    table.add_column("Train Sharpe", justify="right")
+    table.add_column("Test Sharpe", justify="right")
+    table.add_column("Decay", justify="right")
+
+    for w in result.windows:
+        decay_style = "green" if w.sharpe_decay < 0.2 else "yellow" if w.sharpe_decay < 0.5 else "red"
+        test_style = "green" if w.test_sharpe > 0 else "red"
+        table.add_row(
+            f"#{w.window_num}",
+            f"{w.test_start.strftime('%Y-%m')} to {w.test_end.strftime('%Y-%m')}",
+            f"{w.train_sharpe:.2f}",
+            f"[{test_style}]{w.test_sharpe:.2f}[/{test_style}]",
+            f"[{decay_style}]{w.sharpe_decay:+.2f}[/{decay_style}]",
+        )
+
+    console.print(table)
+    console.print()
+
+    # Aggregate metrics
+    console.print("[bold]Aggregate Performance:[/bold]")
+
+    avg_train_style = "green" if result.avg_train_sharpe > 0 else "red"
+    avg_test_style = "green" if result.avg_test_sharpe > 0 else "red"
+    console.print(f"  Avg Train Sharpe:   [{avg_train_style}]{result.avg_train_sharpe:.2f}[/{avg_train_style}]")
+    console.print(f"  Avg Test Sharpe:    [{avg_test_style}]{result.avg_test_sharpe:.2f}[/{avg_test_style}]")
+
+    decay_pct_style = "green" if result.avg_sharpe_decay_pct < 30 else "yellow" if result.avg_sharpe_decay_pct < 50 else "red"
+    console.print(f"  Sharpe Decay:       [{decay_pct_style}]{result.avg_sharpe_decay_pct:.0f}%[/{decay_pct_style}]")
+    console.print()
+
+    # Out-of-sample performance
+    console.print("[bold]Out-of-Sample Performance:[/bold]")
+    oos_ret_style = "green" if result.total_oos_return > 0 else "red"
+    console.print(f"  Total OOS Return:   [{oos_ret_style}]{result.total_oos_return*100:+.1f}%[/{oos_ret_style}]")
+    console.print(f"  OOS Sharpe:         {result.oos_sharpe:.2f}")
+    console.print()
+
+    # Strategy assessment
+    console.print("[bold]Strategy Assessment:[/bold]")
+
+    # Overfitting
+    if result.overfitting_score < 0.3:
+        overfit_label = "[green]Low[/green] - strategy generalizes well"
+    elif result.overfitting_score < 0.5:
+        overfit_label = "[yellow]Moderate[/yellow] - some in-sample bias"
+    else:
+        overfit_label = "[red]High[/red] - likely overfitting"
+    console.print(f"  Overfitting Risk:   {overfit_label} ({result.overfitting_score:.0%})")
+
+    # Consistency
+    if result.consistency_score > 0.7:
+        consist_label = "[green]High[/green] - wins in most periods"
+    elif result.consistency_score > 0.5:
+        consist_label = "[yellow]Moderate[/yellow] - mixed results"
+    else:
+        consist_label = "[red]Low[/red] - inconsistent performance"
+    console.print(f"  Consistency:        {consist_label} ({result.consistency_score:.0%})")
+
+    # Export if requested
+    if export:
+        export_walk_forward(result, export)
         console.print(f"[green]Exported to {export}[/green]")
 
     console.print()
