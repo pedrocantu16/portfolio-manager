@@ -332,7 +332,7 @@ def optimize(
         Path | None, typer.Argument(help="Path to CSV file (optional if loaded)")
     ] = None,
     objective: Annotated[
-        str, typer.Option(help="Objective: max_sharpe, min_volatility, max_return")
+        str, typer.Option(help="Objective: max_sharpe, max_sortino, min_volatility, max_return")
     ] = "max_sharpe",
     max_position: Annotated[
         float, typer.Option(help="Maximum weight per position (0.0-1.0)")
@@ -355,6 +355,12 @@ def optimize(
     market_premium: Annotated[
         float, typer.Option(help="Market risk premium for CAPM (e.g., 0.05 = 5%)")
     ] = 0.05,
+    vs: Annotated[
+        str, typer.Option(help="Benchmark ticker for comparison (e.g., SPY)")
+    ] = "SPY",
+    include: Annotated[
+        str | None, typer.Option(help="Additional tickers to consider (comma-separated, e.g., AAPL,MSFT,GOOGL)")
+    ] = None,
     export: Annotated[
         Path | None, typer.Option(help="Export results to file (.csv or .json)")
     ] = None,
@@ -370,18 +376,28 @@ def optimize(
     # Map string to Objective enum
     obj_map = {
         "max_sharpe": Objective.MAX_SHARPE,
+        "max_sortino": Objective.MAX_SORTINO,
         "min_volatility": Objective.MIN_VOLATILITY,
         "min_vol": Objective.MIN_VOLATILITY,
         "max_return": Objective.MAX_RETURN,
     }
     if objective not in obj_map:
         console.print(f"[red]Unknown objective: {objective}[/red]")
-        console.print("Options: max_sharpe, min_volatility, max_return")
+        console.print("Options: max_sharpe, max_sortino, min_volatility, max_return")
         raise typer.Exit(1)
 
     obj = obj_map[objective]
 
-    symbols = portfolio.get_symbols(include_cash=False)
+    portfolio_symbols = portfolio.get_symbols(include_cash=False)
+
+    # Parse additional tickers to include
+    additional_symbols = []
+    if include:
+        additional_symbols = [s.strip().upper() for s in include.split(",") if s.strip()]
+        additional_symbols = [s for s in additional_symbols if s not in portfolio_symbols]
+
+    symbols = portfolio_symbols + additional_symbols
+
     if not symbols:
         console.print("[yellow]No investable positions to optimize.[/yellow]")
         return
@@ -401,20 +417,26 @@ def optimize(
     console.print()
     console.print(f"[bold]Portfolio Optimization ({obj.value}, {method})[/bold]")
     console.print("─" * 50)
+    if additional_symbols:
+        console.print(f"[dim]Including additional tickers: {', '.join(additional_symbols)}[/dim]")
     console.print("[dim]Fetching market data...[/dim]")
 
     fetcher = MarketDataFetcher()
     try:
-        # Fetch asset prices
-        prices = fetcher.get_historical_prices(symbols, period=period)
+        # Fetch asset prices and benchmark
+        all_symbols = symbols + [vs]
+        prices = fetcher.get_historical_prices(all_symbols, period=period)
         risk_free_rate = fetcher.get_risk_free_rate()
 
         # Fetch market returns for CAPM
         market_returns = None
         if return_method == ReturnEstimator.CAPM:
-            market_prices = fetcher.get_historical_prices(["SPY"], period=period)
-            if not market_prices.empty:
-                market_returns = calculate_returns(market_prices)["SPY"]
+            if vs != "SPY" and "SPY" not in prices.columns:
+                market_prices = fetcher.get_historical_prices(["SPY"], period=period)
+                if not market_prices.empty:
+                    market_returns = calculate_returns(market_prices)["SPY"]
+            elif "SPY" in prices.columns:
+                market_returns = calculate_returns(prices[["SPY"]])["SPY"]
     except Exception as e:
         console.print(f"[red]Error fetching market data: {e}[/red]")
         raise typer.Exit(1)
@@ -424,11 +446,20 @@ def optimize(
         raise typer.Exit(1)
 
     available_symbols = [s for s in symbols if s in prices.columns]
-    missing_symbols = set(symbols) - set(available_symbols)
-    if missing_symbols:
-        console.print(f"[yellow]Warning: No data for: {', '.join(missing_symbols)}[/yellow]")
 
-    returns = calculate_returns(prices[available_symbols])
+    # Check for invalid additional tickers - stop if any are invalid
+    invalid_additional = [s for s in additional_symbols if s not in prices.columns]
+    if invalid_additional:
+        console.print(f"[red]Invalid ticker(s): {', '.join(invalid_additional)}[/red]")
+        console.print("Please check the ticker symbols and try again.")
+        raise typer.Exit(1)
+
+    # Warn about missing portfolio symbols (these are from the loaded portfolio)
+    missing_portfolio = [s for s in portfolio_symbols if s not in prices.columns]
+    if missing_portfolio:
+        console.print(f"[yellow]Warning: No data for portfolio positions: {', '.join(missing_portfolio)}[/yellow]")
+
+    returns = calculate_returns(prices[available_symbols]).dropna()
 
     console.print("[dim]Running optimization...[/dim]")
     optimizer = PortfolioOptimizer(
@@ -460,12 +491,16 @@ def optimize(
     table.add_column("Change", justify="right")
 
     current_weights = portfolio.get_weights(include_cash=False)
-    # Renormalize current weights to available symbols
-    total_current = sum(current_weights.get(s, 0) for s in available_symbols)
+    # Renormalize current weights to available portfolio symbols only
+    portfolio_available = [s for s in portfolio_symbols if s in available_symbols]
+    total_current = sum(current_weights.get(s, 0) for s in portfolio_available)
     if total_current > 0:
         current_weights = {
-            s: current_weights.get(s, 0) / total_current for s in available_symbols
+            s: current_weights.get(s, 0) / total_current for s in portfolio_available
         }
+    # Additional symbols have 0 current weight
+    for s in additional_symbols:
+        current_weights[s] = 0.0
 
     # Sort by optimal weight descending
     sorted_symbols = sorted(
@@ -480,9 +515,11 @@ def optimize(
         if abs(optimal) < 0.1 and abs(current) < 0.1:
             continue
 
+        # Mark new symbols
+        display_symbol = f"{symbol} [yellow](new)[/yellow]" if symbol in additional_symbols else symbol
         change_style = "green" if change > 0 else "red" if change < 0 else "dim"
         table.add_row(
-            symbol,
+            display_symbol,
             f"{current:.1f}%",
             f"{optimal:.1f}%",
             f"[{change_style}]{change:+.1f}%[/{change_style}]",
@@ -496,42 +533,89 @@ def optimize(
     current_sharpe = (
         (current_return - risk_free_rate) / current_vol if current_vol > 0 else 0.0
     )
+    # Calculate current Sortino using portfolio returns
+    current_port_returns = sum(
+        returns[s] * current_weights.get(s, 0)
+        for s in available_symbols if s in returns.columns
+    )
+    current_sortino = calculate_sortino_ratio(current_port_returns, risk_free_rate)
+
+    # Calculate benchmark metrics
+    bench_returns = None
+    bench_return = bench_vol = bench_sharpe = bench_sortino = None
+    if vs in prices.columns:
+        bench_returns = calculate_returns(prices[[vs]])[vs]
+        bench_return = bench_returns.mean() * 252
+        bench_vol = bench_returns.std() * (252 ** 0.5)
+        bench_sharpe = (bench_return - risk_free_rate) / bench_vol if bench_vol > 0 else 0.0
+        bench_sortino = calculate_sortino_ratio(bench_returns, risk_free_rate)
 
     # Comparison table
     console.print()
     console.print("[bold]Performance Comparison:[/bold]")
 
-    def fmt_change(curr: float, opt: float, pct: bool = True) -> str:
-        diff = opt - curr
+    comp_table = Table(show_header=True)
+    comp_table.add_column("Metric")
+    comp_table.add_column("Current", justify="right")
+    comp_table.add_column("Optimal", justify="right")
+    if bench_returns is not None:
+        comp_table.add_column(vs, justify="right")
+
+    def fmt_vs_bench(val: float, bench: float | None, pct: bool = True) -> str:
+        if bench is None:
+            return ""
+        diff = val - bench
         style = "green" if diff > 0 else "red" if diff < 0 else "dim"
         if pct:
             return f"[{style}]{diff*100:+.1f}%[/{style}]"
         return f"[{style}]{diff:+.2f}[/{style}]"
 
-    comp_table = Table(show_header=True)
-    comp_table.add_column("Metric")
-    comp_table.add_column("Current", justify="right")
-    comp_table.add_column("Optimal", justify="right")
-    comp_table.add_column("Change", justify="right")
-
-    comp_table.add_row(
-        "Expected Return",
-        f"{current_return*100:.1f}%",
-        f"{result.expected_return*100:.1f}%",
-        fmt_change(current_return, result.expected_return),
-    )
-    comp_table.add_row(
-        "Volatility",
-        f"{current_vol*100:.1f}%",
-        f"{result.volatility*100:.1f}%",
-        fmt_change(current_vol, result.volatility),
-    )
-    comp_table.add_row(
-        "Sharpe Ratio",
-        f"{current_sharpe:.2f}",
-        f"{result.sharpe_ratio:.2f}",
-        fmt_change(current_sharpe, result.sharpe_ratio, pct=False),
-    )
+    if bench_returns is not None:
+        comp_table.add_row(
+            "Expected Return",
+            f"{current_return*100:.1f}%",
+            f"{result.expected_return*100:.1f}% ({fmt_vs_bench(result.expected_return, bench_return)})",
+            f"{bench_return*100:.1f}%",
+        )
+        comp_table.add_row(
+            "Volatility",
+            f"{current_vol*100:.1f}%",
+            f"{result.volatility*100:.1f}%",
+            f"{bench_vol*100:.1f}%",
+        )
+        comp_table.add_row(
+            "Sharpe Ratio",
+            f"{current_sharpe:.2f}",
+            f"{result.sharpe_ratio:.2f} ({fmt_vs_bench(result.sharpe_ratio, bench_sharpe, pct=False)})",
+            f"{bench_sharpe:.2f}",
+        )
+        comp_table.add_row(
+            "Sortino Ratio",
+            f"{current_sortino:.2f}",
+            f"{result.sortino_ratio:.2f} ({fmt_vs_bench(result.sortino_ratio, bench_sortino, pct=False)})",
+            f"{bench_sortino:.2f}",
+        )
+    else:
+        comp_table.add_row(
+            "Expected Return",
+            f"{current_return*100:.1f}%",
+            f"{result.expected_return*100:.1f}%",
+        )
+        comp_table.add_row(
+            "Volatility",
+            f"{current_vol*100:.1f}%",
+            f"{result.volatility*100:.1f}%",
+        )
+        comp_table.add_row(
+            "Sharpe Ratio",
+            f"{current_sharpe:.2f}",
+            f"{result.sharpe_ratio:.2f}",
+        )
+        comp_table.add_row(
+            "Sortino Ratio",
+            f"{current_sortino:.2f}",
+            f"{result.sortino_ratio:.2f}",
+        )
 
     console.print(comp_table)
 
@@ -639,6 +723,12 @@ def rebalance(
     current_sharpe = (
         (current_return - risk_free_rate) / current_vol if current_vol > 0 else 0.0
     )
+    # Calculate current Sortino
+    current_port_returns = sum(
+        returns[s] * current_weights.get(s, 0)
+        for s in available_symbols if s in returns.columns
+    )
+    current_sortino = calculate_sortino_ratio(current_port_returns, risk_free_rate)
 
     invested_value = portfolio.invested_value
 
@@ -717,6 +807,12 @@ def rebalance(
         f"{current_sharpe:.2f}",
         f"{result.sharpe_ratio:.2f}",
         fmt_change(current_sharpe, result.sharpe_ratio, pct=False),
+    )
+    comp_table.add_row(
+        "Sortino Ratio",
+        f"{current_sortino:.2f}",
+        f"{result.sortino_ratio:.2f}",
+        fmt_change(current_sortino, result.sortino_ratio, pct=False),
     )
 
     console.print(comp_table)
@@ -993,6 +1089,28 @@ def benchmark(
         f"{port_vol*100:.1f}%",
         f"{bench_vol*100:.1f}%",
         f"[{vol_style}]{vol_diff*100:+.1f}%[/{vol_style}]",
+    )
+
+    port_sharpe = calculate_sharpe_ratio(port_annual, port_vol, risk_free_rate)
+    bench_sharpe = calculate_sharpe_ratio(bench_annual, bench_vol, risk_free_rate)
+    sharpe_diff = port_sharpe - bench_sharpe
+    sharpe_style = "green" if sharpe_diff > 0 else "red"
+    perf_table.add_row(
+        "Sharpe Ratio",
+        f"{port_sharpe:.2f}",
+        f"{bench_sharpe:.2f}",
+        f"[{sharpe_style}]{sharpe_diff:+.2f}[/{sharpe_style}]",
+    )
+
+    port_sortino = calculate_sortino_ratio(portfolio_returns, risk_free_rate)
+    bench_sortino = calculate_sortino_ratio(benchmark_returns, risk_free_rate)
+    sortino_diff = port_sortino - bench_sortino
+    sortino_style = "green" if sortino_diff > 0 else "red"
+    perf_table.add_row(
+        "Sortino Ratio",
+        f"{port_sortino:.2f}",
+        f"{bench_sortino:.2f}",
+        f"[{sortino_style}]{sortino_diff:+.2f}[/{sortino_style}]",
     )
 
     console.print(perf_table)
@@ -1343,7 +1461,7 @@ def walkforward(
         int, typer.Option(help="Test window in months")
     ] = 3,
     objective: Annotated[
-        str, typer.Option(help="Optimization objective: max_sharpe, min_volatility")
+        str, typer.Option(help="Optimization objective: max_sharpe, max_sortino, min_volatility")
     ] = "max_sharpe",
     max_position: Annotated[
         float, typer.Option(help="Maximum weight per position (0.0-1.0)")
@@ -1375,6 +1493,7 @@ def walkforward(
     # Map objective string to enum
     obj_map = {
         "max_sharpe": Objective.MAX_SHARPE,
+        "max_sortino": Objective.MAX_SORTINO,
         "min_volatility": Objective.MIN_VOLATILITY,
         "min_vol": Objective.MIN_VOLATILITY,
     }

@@ -118,17 +118,26 @@ Find optimal portfolio allocation using mean-variance optimization.
 # Basic optimization (max Sharpe ratio)
 uv run portfolio optimize Portfolio_Positions.csv --max-position 0.3
 
+# Maximize Sortino ratio (focuses on downside risk)
+uv run portfolio optimize Portfolio_Positions.csv --objective max_sortino
+
 # Minimum volatility portfolio
 uv run portfolio optimize Portfolio_Positions.csv --objective min_volatility
 
 # Using CAPM for expected returns
 uv run portfolio optimize Portfolio_Positions.csv --method capm
+
+# Compare optimized portfolio vs QQQ benchmark
+uv run portfolio optimize Portfolio_Positions.csv --vs QQQ
+
+# Include additional tickers not in portfolio
+uv run portfolio optimize Portfolio_Positions.csv --include AAPL,MSFT,GOOGL
 ```
 
 **Options:**
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--objective` | `max_sharpe` | Optimization goal: `max_sharpe`, `min_volatility`, `max_return` |
+| `--objective` | `max_sharpe` | Optimization goal: `max_sharpe`, `max_sortino`, `min_volatility`, `max_return` |
 | `--max-position` | `1.0` | Maximum weight per position (e.g., 0.3 = 30%) |
 | `--min-position` | `0.0` | Minimum weight per position |
 | `--period` | `2y` | Historical data period |
@@ -136,6 +145,8 @@ uv run portfolio optimize Portfolio_Positions.csv --method capm
 | `--max-return` | `0.25` | Cap expected return per asset (25%) |
 | `--shrinkage` | `0.3` | Blend returns toward mean (0-1, historical only) |
 | `--market-premium` | `0.05` | Market risk premium for CAPM (5%) |
+| `--vs` | `SPY` | Benchmark ticker for comparison |
+| `--include` | - | Additional tickers to consider (comma-separated) |
 
 ### `portfolio rebalance <csv>`
 
@@ -264,7 +275,7 @@ uv run portfolio walkforward Portfolio_Positions.csv --train 6 --test 2 --object
 |--------|---------|-------------|
 | `--train` | `12` | Training window in months |
 | `--test` | `3` | Test window in months |
-| `--objective` | `max_sharpe` | Optimization objective: `max_sharpe`, `min_volatility` |
+| `--objective` | `max_sharpe` | Optimization objective: `max_sharpe`, `max_sortino`, `min_volatility` |
 | `--max-position` | `0.30` | Maximum weight per position |
 | `--method` | `historical` | Return estimation: `historical` or `capm` |
 

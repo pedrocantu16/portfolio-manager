@@ -21,7 +21,7 @@ from portfolio_manager.metrics import (
     calculate_max_drawdown,
 )
 from portfolio_manager.optimization import PortfolioOptimizer
-from portfolio_manager.optimization.optimizer import Objective
+from portfolio_manager.optimization.optimizer import Objective, ReturnEstimator
 from portfolio_manager.backtest import run_backtest, run_monte_carlo, run_walk_forward, RebalanceFrequency
 from portfolio_manager.core.sectors import Sector, get_sectors_for_portfolio
 from portfolio_manager.core.tax import analyze_tax_loss_harvesting, get_wash_sale_alternatives
@@ -195,19 +195,15 @@ def show_optimization(portfolio: Portfolio, prices: pd.DataFrame, risk_free_rate
     """Interactive portfolio optimization."""
     st.subheader("Portfolio Optimization")
 
-    symbols = portfolio.get_symbols(include_cash=False)
-    available = [s for s in symbols if s in prices.columns]
-
-    if len(available) < 2:
-        st.warning("Need at least 2 assets for optimization.")
-        return
+    portfolio_symbols = portfolio.get_symbols(include_cash=False)
+    portfolio_available = [s for s in portfolio_symbols if s in prices.columns]
 
     col1, col2 = st.columns(2)
 
     with col1:
         objective = st.selectbox(
             "Objective",
-            ["Max Sharpe", "Min Volatility"],
+            ["Max Sharpe", "Max Sortino", "Min Volatility"],
             index=0,
         )
         max_position_pct = st.slider(
@@ -226,38 +222,169 @@ def show_optimization(portfolio: Portfolio, prices: pd.DataFrame, risk_free_rate
             ["1y", "2y", "3y", "5y"],
             index=1,
         )
+        benchmark = st.text_input("Benchmark", value="SPY", key="opt_bench")
+
+    # Additional tickers input
+    include_tickers = st.text_input(
+        "Include Additional Tickers",
+        placeholder="e.g., AAPL, MSFT, GOOGL",
+        help="Comma-separated tickers to consider in optimization (not currently in portfolio)",
+        key="opt_include",
+    )
+
+    # Advanced options in expandable section
+    with st.expander("Advanced Options"):
+        adv_col1, adv_col2 = st.columns(2)
+
+        with adv_col1:
+            return_method = st.selectbox(
+                "Return Estimation Method",
+                ["Historical", "CAPM"],
+                index=0,
+                help="Historical uses past returns; CAPM estimates based on market beta",
+                key="opt_method",
+            )
+            min_position_pct = st.slider(
+                "Min Position Size (%)",
+                min_value=0,
+                max_value=50,
+                value=0,
+                step=1,
+                help="Minimum weight for any position (0 = can exclude assets)",
+                key="opt_min_pos",
+            )
+            min_position = min_position_pct / 100
+
+        with adv_col2:
+            if return_method == "Historical":
+                shrinkage = st.slider(
+                    "Shrinkage Factor",
+                    min_value=0.0,
+                    max_value=1.0,
+                    value=0.3,
+                    step=0.1,
+                    help="Blend returns toward mean (0=pure historical, 1=all same)",
+                    key="opt_shrinkage",
+                )
+                max_return_cap = st.slider(
+                    "Max Expected Return (%)",
+                    min_value=10,
+                    max_value=100,
+                    value=25,
+                    step=5,
+                    help="Cap on expected return per asset to avoid outliers",
+                    key="opt_max_ret",
+                )
+                market_premium = 0.05  # Not used for historical
+            else:  # CAPM
+                market_premium = st.slider(
+                    "Market Risk Premium (%)",
+                    min_value=1,
+                    max_value=15,
+                    value=5,
+                    step=1,
+                    help="Expected excess return of market over risk-free rate",
+                    key="opt_mrp",
+                ) / 100
+                shrinkage = 0.0  # Not used for CAPM
+                max_return_cap = 25  # Default
 
     if st.button("Run Optimization", type="primary"):
-        with st.spinner("Optimizing..."):
-            returns = calculate_returns(prices[available])
+        # Parse additional tickers
+        additional_symbols = []
+        if include_tickers:
+            additional_symbols = [s.strip().upper() for s in include_tickers.split(",") if s.strip()]
+            additional_symbols = [s for s in additional_symbols if s not in portfolio_symbols]
 
-            obj = Objective.MAX_SHARPE if "Sharpe" in objective else Objective.MIN_VOLATILITY
+        all_symbols = portfolio_available + additional_symbols
+
+        if len(all_symbols) < 2:
+            st.warning("Need at least 2 assets for optimization.")
+            return
+
+        with st.spinner("Optimizing..."):
+            fetcher = MarketDataFetcher()
+            prices_extended = prices.copy()
+
+            # Fetch additional tickers and validate
+            invalid_tickers = []
+            if additional_symbols:
+                extra_prices = fetcher.get_historical_prices(additional_symbols, period=period)
+                for s in additional_symbols:
+                    if s in extra_prices.columns and not extra_prices[s].isna().all():
+                        prices_extended[s] = extra_prices[s]
+                    else:
+                        invalid_tickers.append(s)
+
+            if invalid_tickers:
+                st.error(f"Invalid ticker(s): {', '.join(invalid_tickers)}. Please check and try again.")
+                return
+
+            # Fetch benchmark if not already available
+            if benchmark and benchmark not in prices_extended.columns:
+                bench_prices = fetcher.get_historical_prices([benchmark], period=period)
+                if benchmark in bench_prices.columns:
+                    prices_extended[benchmark] = bench_prices[benchmark]
+
+            # Filter to available symbols (must have valid data)
+            available = [s for s in all_symbols if s in prices_extended.columns and not prices_extended[s].isna().all()]
+            if len(available) < 2:
+                st.warning("Not enough valid tickers for optimization.")
+                return
+
+            returns = calculate_returns(prices_extended[available]).dropna()
+
+            if "Sharpe" in objective:
+                obj = Objective.MAX_SHARPE
+            elif "Sortino" in objective:
+                obj = Objective.MAX_SORTINO
+            else:
+                obj = Objective.MIN_VOLATILITY
+
+            # Fetch market returns for CAPM if needed
+            market_returns = None
+            if return_method == "CAPM":
+                if "SPY" not in prices_extended.columns:
+                    spy_prices = fetcher.get_historical_prices(["SPY"], period=period)
+                    if "SPY" in spy_prices.columns:
+                        market_returns = calculate_returns(spy_prices)["SPY"]
+                else:
+                    market_returns = calculate_returns(prices_extended[["SPY"]])["SPY"]
 
             optimizer = PortfolioOptimizer(
                 returns,
                 risk_free_rate,
-                max_expected_return=0.25,
-                shrinkage=0.3,
+                max_expected_return=max_return_cap / 100,
+                shrinkage=shrinkage if return_method == "Historical" else 0.0,
+                return_method=ReturnEstimator.CAPM if return_method == "CAPM" else ReturnEstimator.HISTORICAL,
+                market_returns=market_returns,
+                market_risk_premium=market_premium,
             )
             result = optimizer.optimize(
                 objective=obj,
+                min_weight=min_position,
                 max_weight=max_position,
             )
 
             current_weights = portfolio.get_weights(include_cash=False)
-            total = sum(current_weights.get(s, 0) for s in available)
+            # Normalize to portfolio symbols only
+            total = sum(current_weights.get(s, 0) for s in portfolio_available)
             if total > 0:
-                current_weights = {s: current_weights.get(s, 0) / total for s in available}
+                current_weights = {s: current_weights.get(s, 0) / total for s in portfolio_available}
+            # Additional symbols have 0 current weight
+            for s in additional_symbols:
+                current_weights[s] = 0.0
 
             # Results table
             data = []
             for symbol in sorted(available, key=lambda s: result.weights.get(s, 0), reverse=True):
                 current = current_weights.get(symbol, 0) * 100
                 optimal = result.weights.get(symbol, 0) * 100
-                change = optimal - current
+                change = round(optimal - current, 1)  # Round to avoid floating point noise
                 if abs(optimal) > 0.1 or abs(current) > 0.1:
+                    display_symbol = f"{symbol} (new)" if symbol in additional_symbols else symbol
                     data.append({
-                        "Symbol": symbol,
+                        "Symbol": display_symbol,
                         "Current": f"{current:.1f}%",
                         "Optimal": f"{optimal:.1f}%",
                         "Change": change,
@@ -279,16 +406,37 @@ def show_optimization(portfolio: Portfolio, prices: pd.DataFrame, risk_free_rate
                 )
 
             with col2:
-                st.write("**Expected Performance**")
+                st.write("**Performance vs Benchmark**")
                 current_ret = calculate_portfolio_return(current_weights, returns, annualize=True)
                 current_vol = calculate_portfolio_volatility(current_weights, returns, annualize=True)
                 current_sharpe = (current_ret - risk_free_rate) / current_vol if current_vol > 0 else 0
+                current_port_returns = sum(
+                    returns[s] * current_weights.get(s, 0)
+                    for s in available if s in returns.columns
+                )
+                current_sortino = calculate_sortino_ratio(current_port_returns, risk_free_rate)
 
-                perf_df = pd.DataFrame([
-                    {"Metric": "Return", "Current": f"{current_ret*100:.1f}%", "Optimal": f"{result.expected_return*100:.1f}%"},
-                    {"Metric": "Volatility", "Current": f"{current_vol*100:.1f}%", "Optimal": f"{result.volatility*100:.1f}%"},
-                    {"Metric": "Sharpe", "Current": f"{current_sharpe:.2f}", "Optimal": f"{result.sharpe_ratio:.2f}"},
-                ])
+                # Calculate benchmark metrics
+                if benchmark and benchmark in prices_extended.columns:
+                    bench_rets = calculate_returns(prices_extended[[benchmark]])[benchmark]
+                    bench_ret = bench_rets.mean() * 252
+                    bench_vol = bench_rets.std() * (252 ** 0.5)
+                    bench_sharpe = (bench_ret - risk_free_rate) / bench_vol if bench_vol > 0 else 0
+                    bench_sortino = calculate_sortino_ratio(bench_rets, risk_free_rate)
+
+                    perf_df = pd.DataFrame([
+                        {"Metric": "Return", "Current": f"{current_ret*100:.1f}%", "Optimal": f"{result.expected_return*100:.1f}%", benchmark: f"{bench_ret*100:.1f}%"},
+                        {"Metric": "Volatility", "Current": f"{current_vol*100:.1f}%", "Optimal": f"{result.volatility*100:.1f}%", benchmark: f"{bench_vol*100:.1f}%"},
+                        {"Metric": "Sharpe", "Current": f"{current_sharpe:.2f}", "Optimal": f"{result.sharpe_ratio:.2f}", benchmark: f"{bench_sharpe:.2f}"},
+                        {"Metric": "Sortino", "Current": f"{current_sortino:.2f}", "Optimal": f"{result.sortino_ratio:.2f}", benchmark: f"{bench_sortino:.2f}"},
+                    ])
+                else:
+                    perf_df = pd.DataFrame([
+                        {"Metric": "Return", "Current": f"{current_ret*100:.1f}%", "Optimal": f"{result.expected_return*100:.1f}%"},
+                        {"Metric": "Volatility", "Current": f"{current_vol*100:.1f}%", "Optimal": f"{result.volatility*100:.1f}%"},
+                        {"Metric": "Sharpe", "Current": f"{current_sharpe:.2f}", "Optimal": f"{result.sharpe_ratio:.2f}"},
+                        {"Metric": "Sortino", "Current": f"{current_sortino:.2f}", "Optimal": f"{result.sortino_ratio:.2f}"},
+                    ])
                 st.dataframe(perf_df, use_container_width=True, hide_index=True)
 
 
@@ -569,7 +717,7 @@ def show_rebalance(portfolio: Portfolio, prices: pd.DataFrame, risk_free_rate: f
     with col1:
         objective = st.selectbox(
             "Objective",
-            ["Max Sharpe", "Min Volatility"],
+            ["Max Sharpe", "Max Sortino", "Min Volatility"],
             index=0,
             key="rebal_obj",
         )
@@ -588,7 +736,12 @@ def show_rebalance(portfolio: Portfolio, prices: pd.DataFrame, risk_free_rate: f
     if st.button("Calculate Trades", type="primary", key="rebal_btn"):
         with st.spinner("Calculating optimal trades..."):
             returns = calculate_returns(prices[available])
-            obj = Objective.MAX_SHARPE if "Sharpe" in objective else Objective.MIN_VOLATILITY
+            if "Sharpe" in objective:
+                obj = Objective.MAX_SHARPE
+            elif "Sortino" in objective:
+                obj = Objective.MAX_SORTINO
+            else:
+                obj = Objective.MIN_VOLATILITY
 
             optimizer = PortfolioOptimizer(
                 returns,
@@ -704,10 +857,17 @@ def show_benchmark(portfolio: Portfolio, prices: pd.DataFrame, risk_free_rate: f
             port_vol = portfolio_returns.std() * (252 ** 0.5)
             bench_vol = bench_returns.std() * (252 ** 0.5)
 
+            port_sharpe = calculate_sharpe_ratio(port_annual, port_vol, risk_free_rate)
+            bench_sharpe = calculate_sharpe_ratio(bench_annual, bench_vol, risk_free_rate)
+            port_sortino = calculate_sortino_ratio(portfolio_returns, risk_free_rate)
+            bench_sortino = calculate_sortino_ratio(bench_returns, risk_free_rate)
+
             st.write("**Performance Comparison:**")
             perf_df = pd.DataFrame([
                 {"Metric": "Annual Return", "Portfolio": f"{port_annual*100:.1f}%", benchmark: f"{bench_annual*100:.1f}%"},
                 {"Metric": "Volatility", "Portfolio": f"{port_vol*100:.1f}%", benchmark: f"{bench_vol*100:.1f}%"},
+                {"Metric": "Sharpe Ratio", "Portfolio": f"{port_sharpe:.2f}", benchmark: f"{bench_sharpe:.2f}"},
+                {"Metric": "Sortino Ratio", "Portfolio": f"{port_sortino:.2f}", benchmark: f"{bench_sortino:.2f}"},
             ])
             st.dataframe(perf_df, use_container_width=True, hide_index=True)
 
@@ -826,13 +986,18 @@ def show_walkforward(portfolio: Portfolio, prices: pd.DataFrame, risk_free_rate:
     with col3:
         objective = st.selectbox(
             "Objective",
-            ["Max Sharpe", "Min Volatility"],
+            ["Max Sharpe", "Max Sortino", "Min Volatility"],
             key="wf_obj",
         )
 
     if st.button("Run Walk-Forward", type="primary", key="wf_btn"):
         with st.spinner("Running walk-forward analysis (this may take a minute)..."):
-            obj = Objective.MAX_SHARPE if "Sharpe" in objective else Objective.MIN_VOLATILITY
+            if "Sharpe" in objective:
+                obj = Objective.MAX_SHARPE
+            elif "Sortino" in objective:
+                obj = Objective.MAX_SORTINO
+            else:
+                obj = Objective.MIN_VOLATILITY
 
             try:
                 result = run_walk_forward(

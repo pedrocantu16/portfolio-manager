@@ -14,7 +14,9 @@ from portfolio_manager.optimization.constraints import (
     weights_sum_to_one,
 )
 from portfolio_manager.optimization.objectives import (
+    downside_deviation,
     negative_sharpe_ratio,
+    negative_sortino_ratio,
     portfolio_return,
     portfolio_volatility,
 )
@@ -24,6 +26,7 @@ class Objective(StrEnum):
     """Optimization objectives."""
 
     MAX_SHARPE = "max_sharpe"
+    MAX_SORTINO = "max_sortino"
     MIN_VOLATILITY = "min_volatility"
     TARGET_RETURN = "target_return"
     MAX_RETURN = "max_return"
@@ -44,6 +47,7 @@ class OptimizationResult:
     expected_return: float
     volatility: float
     sharpe_ratio: float
+    sortino_ratio: float
     objective: Objective
     success: bool
     message: str
@@ -52,7 +56,7 @@ class OptimizationResult:
         return (
             f"OptimizationResult(objective={self.objective.value}, "
             f"return={self.expected_return:.2%}, vol={self.volatility:.2%}, "
-            f"sharpe={self.sharpe_ratio:.2f})"
+            f"sharpe={self.sharpe_ratio:.2f}, sortino={self.sortino_ratio:.2f})"
         )
 
 
@@ -118,6 +122,7 @@ class PortfolioOptimizer:
 
         self.mean_returns = raw_mean_returns
         self.cov_matrix = returns.cov().values
+        self.returns_matrix = returns.values
 
     def _calculate_capm_returns(
         self,
@@ -166,6 +171,12 @@ class PortfolioOptimizer:
             self.risk_free_rate, self.trading_days
         )
 
+    def _obj_max_sortino(self, weights: np.ndarray) -> float:
+        return negative_sortino_ratio(
+            weights, self.mean_returns, self.returns_matrix,
+            self.risk_free_rate, self.trading_days
+        )
+
     def _obj_min_vol(self, weights: np.ndarray) -> float:
         return portfolio_volatility(weights, self.cov_matrix, self.trading_days)
 
@@ -203,6 +214,8 @@ class PortfolioOptimizer:
         obj_fn: Callable[[np.ndarray], float]
         if objective == Objective.MAX_SHARPE:
             obj_fn = self._obj_max_sharpe
+        elif objective == Objective.MAX_SORTINO:
+            obj_fn = self._obj_max_sortino
         elif objective == Objective.MIN_VOLATILITY:
             obj_fn = self._obj_min_vol
         elif objective == Objective.TARGET_RETURN:
@@ -248,11 +261,17 @@ class PortfolioOptimizer:
         )
         sharpe = (exp_return - self.risk_free_rate) / vol if vol > 0 else 0.0
 
+        dd = downside_deviation(
+            optimal_weights, self.returns_matrix, self.risk_free_rate, self.trading_days
+        )
+        sortino = (exp_return - self.risk_free_rate) / dd if dd > 0 else 0.0
+
         return OptimizationResult(
             weights={s: w for s, w in zip(self.symbols, optimal_weights)},
             expected_return=exp_return,
             volatility=vol,
             sharpe_ratio=sharpe,
+            sortino_ratio=sortino,
             objective=objective,
             success=result.success,
             message=result.message,
