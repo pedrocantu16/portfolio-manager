@@ -27,6 +27,7 @@ from portfolio_manager.backtest import (
     RebalanceFrequency,
     run_backtest,
     run_monte_carlo,
+    run_value_add_analysis,
     run_walk_forward,
 )
 from portfolio_manager.metrics.benchmark import BenchmarkAnalysis
@@ -361,6 +362,12 @@ def optimize(
     include: Annotated[
         str | None, typer.Option(help="Additional tickers to consider (comma-separated, e.g., AAPL,MSFT,GOOGL)")
     ] = None,
+    ticker_max: Annotated[
+        str | None, typer.Option("--ticker-max", help="Per-ticker max weights (e.g., BND:0.10,GLD:0.05)")
+    ] = None,
+    ticker_min: Annotated[
+        str | None, typer.Option("--ticker-min", help="Per-ticker min weights (e.g., VOO:0.20)")
+    ] = None,
     export: Annotated[
         Path | None, typer.Option(help="Export results to file (.csv or .json)")
     ] = None,
@@ -461,6 +468,27 @@ def optimize(
 
     returns = calculate_returns(prices[available_symbols]).dropna()
 
+    # Parse per-ticker constraints
+    ticker_max_dict = None
+    ticker_min_dict = None
+    if ticker_max:
+        ticker_max_dict = {}
+        for item in ticker_max.split(","):
+            if ":" in item:
+                sym, val = item.split(":", 1)
+                ticker_max_dict[sym.strip().upper()] = float(val.strip())
+        if ticker_max_dict:
+            console.print(f"[dim]Per-ticker max: {ticker_max_dict}[/dim]")
+
+    if ticker_min:
+        ticker_min_dict = {}
+        for item in ticker_min.split(","):
+            if ":" in item:
+                sym, val = item.split(":", 1)
+                ticker_min_dict[sym.strip().upper()] = float(val.strip())
+        if ticker_min_dict:
+            console.print(f"[dim]Per-ticker min: {ticker_min_dict}[/dim]")
+
     console.print("[dim]Running optimization...[/dim]")
     optimizer = PortfolioOptimizer(
         returns,
@@ -475,6 +503,8 @@ def optimize(
         objective=obj,
         min_weight=min_position,
         max_weight=max_position,
+        ticker_max=ticker_max_dict,
+        ticker_min=ticker_min_dict,
     )
 
     if not result.success:
@@ -511,12 +541,14 @@ def optimize(
         current = current_weights.get(symbol, 0) * 100
         optimal = result.weights.get(symbol, 0) * 100
         change = optimal - current
+        is_new = symbol in additional_symbols
 
-        if abs(optimal) < 0.1 and abs(current) < 0.1:
+        # Show if has weight OR is a new symbol (so user sees it was considered)
+        if abs(optimal) < 0.1 and abs(current) < 0.1 and not is_new:
             continue
 
         # Mark new symbols
-        display_symbol = f"{symbol} [yellow](new)[/yellow]" if symbol in additional_symbols else symbol
+        display_symbol = f"{symbol} [yellow](new)[/yellow]" if is_new else symbol
         change_style = "green" if change > 0 else "red" if change < 0 else "dim"
         table.add_row(
             display_symbol,
@@ -1680,6 +1712,233 @@ MSFT,15000,12000,IRA""",
 
     console.print()
     console.print(f"Edit the file, then run: portfolio summary {output}")
+
+
+@app.command("value-add")
+def value_add(
+    file_path: Annotated[
+        Path | None, typer.Argument(help="Path to CSV file (optional if loaded)")
+    ] = None,
+    train: Annotated[
+        int, typer.Option(help="Training window in months")
+    ] = 12,
+    test: Annotated[
+        int, typer.Option(help="Test window in months")
+    ] = 3,
+    objective: Annotated[
+        str, typer.Option(help="Optimization objective: max_sharpe, max_sortino, min_volatility")
+    ] = "max_sharpe",
+    max_position: Annotated[
+        float, typer.Option(help="Maximum weight per position (0.0-1.0)")
+    ] = 0.30,
+    method: Annotated[
+        str, typer.Option(help="Return estimate: historical or capm")
+    ] = "historical",
+    period: Annotated[
+        str, typer.Option(help="Historical data period (3y, 5y, 10y)")
+    ] = "5y",
+) -> None:
+    """Analyze if diversification adds value over S&P 500."""
+    global _loaded_portfolio
+
+    if file_path:
+        load(file_path)
+
+    portfolio = _get_portfolio()
+
+    console.print()
+    console.print(f"[bold]Value-Add Analysis ({train}mo train / {test}mo test)[/bold]")
+    console.print("─" * 50)
+    console.print("Comparing optimized portfolio vs 100% S&P 500")
+    console.print()
+
+    symbols = portfolio.get_symbols(include_cash=False)
+    if not symbols:
+        console.print("[yellow]No investable positions to analyze.[/yellow]")
+        return
+
+    # Map objective string to enum
+    obj_map = {
+        "max_sharpe": Objective.MAX_SHARPE,
+        "max_sortino": Objective.MAX_SORTINO,
+        "min_volatility": Objective.MIN_VOLATILITY,
+        "min_vol": Objective.MIN_VOLATILITY,
+    }
+    obj = obj_map.get(objective.lower(), Objective.MAX_SHARPE)
+
+    # Map return method
+    method_map = {
+        "historical": ReturnEstimator.HISTORICAL,
+        "capm": ReturnEstimator.CAPM,
+    }
+    return_method = method_map.get(method.lower(), ReturnEstimator.HISTORICAL)
+
+    console.print(f"[dim]Fetching {period} of market data...[/dim]")
+    fetcher = MarketDataFetcher()
+
+    try:
+        all_symbols = symbols + ["SPY"]
+        prices = fetcher.get_historical_prices(all_symbols, period=period)
+        risk_free_rate = fetcher.get_risk_free_rate()
+    except Exception as e:
+        console.print(f"[red]Error fetching market data: {e}[/red]")
+        raise typer.Exit(1)
+
+    if "SPY" not in prices.columns:
+        console.print("[red]Could not fetch SPY data for benchmark comparison.[/red]")
+        raise typer.Exit(1)
+
+    available = [s for s in symbols if s in prices.columns]
+    missing = set(symbols) - set(available)
+    if missing:
+        console.print(f"[yellow]Warning: No data for: {', '.join(missing)}[/yellow]")
+
+    if len(available) < 2:
+        console.print("[red]Need at least 2 assets for optimization.[/red]")
+        raise typer.Exit(1)
+
+    console.print("[dim]Running value-add analysis...[/dim]")
+
+    try:
+        result = run_value_add_analysis(
+            prices=prices,
+            symbols=available,
+            train_months=train,
+            test_months=test,
+            objective=obj,
+            max_weight=max_position,
+            risk_free_rate=risk_free_rate,
+            return_method=return_method,
+        )
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+
+    # Display results
+    console.print()
+    console.print(f"[bold]Results ({len(result.windows)} test windows)[/bold]")
+    console.print()
+
+    # Determine what metric is used for "Beat?"
+    if obj == Objective.MAX_SHARPE:
+        beat_metric = "Sharpe"
+    elif obj == Objective.MAX_SORTINO:
+        beat_metric = "Sortino"
+    elif obj == Objective.MIN_VOLATILITY:
+        beat_metric = "Volatility"
+    else:
+        beat_metric = "Return"
+
+    # Per-window table
+    table = Table(show_header=True)
+    table.add_column("#", justify="center")
+    table.add_column("Test Period", justify="center")
+    table.add_column("Port Ret", justify="right")
+    table.add_column("SPY Ret", justify="right")
+    table.add_column("Port Vol", justify="right")
+    table.add_column("SPY Vol", justify="right")
+    table.add_column("Port ↓Vol", justify="right")
+    table.add_column("SPY ↓Vol", justify="right")
+    table.add_column(f"Beat?", justify="center", style="bold")
+
+    for w in result.windows:
+        beat_icon = "[green]✓[/green]" if w.beat_benchmark else "[red]✗[/red]"
+        table.add_row(
+            str(w.window_num + 1),
+            f"{w.test_start} to {w.test_end}",
+            f"{w.portfolio_return*100:+.1f}%",
+            f"{w.spy_return*100:+.1f}%",
+            f"{w.portfolio_volatility*100:.1f}%",
+            f"{w.spy_volatility*100:.1f}%",
+            f"{w.portfolio_downside_vol*100:.1f}%",
+            f"{w.spy_downside_vol*100:.1f}%",
+            beat_icon,
+        )
+
+    console.print(table)
+    console.print(f"[dim]Beat metric: {beat_metric}[/dim]")
+    console.print()
+
+    # Summary metrics
+    console.print("[bold]Total Out-of-Sample Returns:[/bold]")
+    port_style = "green" if result.total_portfolio_return > result.total_spy_return else "red"
+    console.print(f"  Portfolio: [{port_style}]{result.total_portfolio_return*100:+.1f}%[/{port_style}]")
+    console.print(f"  S&P 500:   {result.total_spy_return*100:+.1f}%")
+    excess = result.total_portfolio_return - result.total_spy_return
+    excess_style = "green" if excess > 0 else "red"
+    console.print(f"  Excess:    [{excess_style}]{excess*100:+.1f}%[/{excess_style}]")
+    console.print()
+
+    console.print("[bold]Risk-Adjusted Performance (avg across windows):[/bold]")
+    sharpe_table = Table(show_header=True)
+    sharpe_table.add_column("Metric")
+    sharpe_table.add_column("Portfolio", justify="right")
+    sharpe_table.add_column("S&P 500", justify="right")
+    sharpe_table.add_column("Difference", justify="right")
+
+    sharpe_diff = result.avg_portfolio_sharpe - result.avg_spy_sharpe
+    sharpe_style = "green" if sharpe_diff > 0 else "red"
+    sharpe_table.add_row(
+        "Sharpe Ratio",
+        f"{result.avg_portfolio_sharpe:.2f}",
+        f"{result.avg_spy_sharpe:.2f}",
+        f"[{sharpe_style}]{sharpe_diff:+.2f}[/{sharpe_style}]",
+    )
+
+    sortino_diff = result.avg_portfolio_sortino - result.avg_spy_sortino
+    sortino_style = "green" if sortino_diff > 0 else "red"
+    sharpe_table.add_row(
+        "Sortino Ratio",
+        f"{result.avg_portfolio_sortino:.2f}",
+        f"{result.avg_spy_sortino:.2f}",
+        f"[{sortino_style}]{sortino_diff:+.2f}[/{sortino_style}]",
+    )
+
+    console.print(sharpe_table)
+    console.print()
+
+    console.print("[bold]Value-Add Metrics:[/bold]")
+    alpha_style = "green" if result.alpha > 0 else "red"
+    console.print(f"  Alpha:             [{alpha_style}]{result.alpha*100:+.2f}%[/{alpha_style}] annualized")
+    console.print(f"  Tracking Error:    {result.tracking_error*100:.1f}%")
+    ir_style = "green" if result.information_ratio > 0 else "red"
+    console.print(f"  Information Ratio: [{ir_style}]{result.information_ratio:.2f}[/{ir_style}]")
+    wr_style = "green" if result.win_rate > 0.5 else "yellow" if result.win_rate == 0.5 else "red"
+    console.print(f"  Win Rate:          [{wr_style}]{result.win_rate*100:.0f}%[/{wr_style}] of periods beat SPY (by {beat_metric})")
+    console.print()
+
+    console.print("[bold]Statistical Significance:[/bold]")
+    conf_style = "green" if result.confidence_pct >= 95 else "yellow" if result.confidence_pct >= 80 else "dim"
+    console.print(f"  Confidence: [{conf_style}]{result.confidence_pct:.0f}%[/{conf_style}]")
+    console.print(f"  p-value:    {result.p_value:.3f}")
+    console.print()
+
+    # Last optimized weights
+    console.print("[bold]Last Optimized Portfolio:[/bold]")
+    weights_table = Table(show_header=True)
+    weights_table.add_column("Symbol", style="cyan")
+    weights_table.add_column("Weight", justify="right")
+
+    sorted_weights = sorted(result.last_weights.items(), key=lambda x: x[1], reverse=True)
+    for symbol, weight in sorted_weights:
+        if weight > 0.001:  # Only show non-zero weights
+            weights_table.add_row(symbol, f"{weight*100:.1f}%")
+
+    console.print(weights_table)
+    console.print()
+
+    # Verdict
+    if "Strong evidence" in result.verdict:
+        verdict_style = "green bold"
+    elif "Moderate evidence" in result.verdict:
+        verdict_style = "yellow"
+    elif "Consider SPY" in result.verdict:
+        verdict_style = "red"
+    else:
+        verdict_style = "dim"
+
+    console.print(f"[{verdict_style}]Verdict: {result.verdict}[/{verdict_style}]")
+    console.print()
 
 
 if __name__ == "__main__":

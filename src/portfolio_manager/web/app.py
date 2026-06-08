@@ -22,7 +22,7 @@ from portfolio_manager.metrics import (
 )
 from portfolio_manager.optimization import PortfolioOptimizer
 from portfolio_manager.optimization.optimizer import Objective, ReturnEstimator
-from portfolio_manager.backtest import run_backtest, run_monte_carlo, run_walk_forward, RebalanceFrequency
+from portfolio_manager.backtest import run_backtest, run_monte_carlo, run_walk_forward, run_value_add_analysis, RebalanceFrequency
 from portfolio_manager.core.sectors import Sector, get_sectors_for_portfolio
 from portfolio_manager.core.tax import analyze_tax_loss_harvesting, get_wash_sale_alternatives
 from portfolio_manager.metrics.benchmark import BenchmarkAnalysis
@@ -289,6 +289,21 @@ def show_optimization(portfolio: Portfolio, prices: pd.DataFrame, risk_free_rate
                 shrinkage = 0.0  # Not used for CAPM
                 max_return_cap = 25  # Default
 
+        # Per-ticker constraints
+        st.write("**Per-Ticker Constraints:**")
+        ticker_max_input = st.text_input(
+            "Max weights per ticker",
+            placeholder="e.g., BND:0.10, GLD:0.05",
+            help="Limit specific tickers (symbol:weight pairs, comma-separated)",
+            key="opt_ticker_max",
+        )
+        ticker_min_input = st.text_input(
+            "Min weights per ticker",
+            placeholder="e.g., VOO:0.20",
+            help="Require minimum allocation to specific tickers",
+            key="opt_ticker_min",
+        )
+
     if st.button("Run Optimization", type="primary"):
         # Parse additional tickers
         additional_symbols = []
@@ -351,6 +366,28 @@ def show_optimization(portfolio: Portfolio, prices: pd.DataFrame, risk_free_rate
                 else:
                     market_returns = calculate_returns(prices_extended[["SPY"]])["SPY"]
 
+            # Parse per-ticker constraints
+            ticker_max_dict = None
+            ticker_min_dict = None
+            if ticker_max_input:
+                ticker_max_dict = {}
+                for item in ticker_max_input.split(","):
+                    if ":" in item:
+                        sym, val = item.split(":", 1)
+                        try:
+                            ticker_max_dict[sym.strip().upper()] = float(val.strip())
+                        except ValueError:
+                            pass
+            if ticker_min_input:
+                ticker_min_dict = {}
+                for item in ticker_min_input.split(","):
+                    if ":" in item:
+                        sym, val = item.split(":", 1)
+                        try:
+                            ticker_min_dict[sym.strip().upper()] = float(val.strip())
+                        except ValueError:
+                            pass
+
             optimizer = PortfolioOptimizer(
                 returns,
                 risk_free_rate,
@@ -364,6 +401,8 @@ def show_optimization(portfolio: Portfolio, prices: pd.DataFrame, risk_free_rate
                 objective=obj,
                 min_weight=min_position,
                 max_weight=max_position,
+                ticker_max=ticker_max_dict,
+                ticker_min=ticker_min_dict,
             )
 
             current_weights = portfolio.get_weights(include_cash=False)
@@ -381,8 +420,10 @@ def show_optimization(portfolio: Portfolio, prices: pd.DataFrame, risk_free_rate
                 current = current_weights.get(symbol, 0) * 100
                 optimal = result.weights.get(symbol, 0) * 100
                 change = round(optimal - current, 1)  # Round to avoid floating point noise
-                if abs(optimal) > 0.1 or abs(current) > 0.1:
-                    display_symbol = f"{symbol} (new)" if symbol in additional_symbols else symbol
+                is_new = symbol in additional_symbols
+                # Show if has weight OR is a new symbol (so user sees it was considered)
+                if abs(optimal) > 0.1 or abs(current) > 0.1 or is_new:
+                    display_symbol = f"{symbol} (new)" if is_new else symbol
                     data.append({
                         "Symbol": display_symbol,
                         "Current": f"{current:.1f}%",
@@ -1055,6 +1096,197 @@ def show_walkforward(portfolio: Portfolio, prices: pd.DataFrame, risk_free_rate:
                 st.metric("Consistency", f"{result.consistency_score*100:.0f}%")
 
 
+def show_value_add(portfolio: Portfolio, prices: pd.DataFrame, risk_free_rate: float):
+    """Value-Add Analysis - compare optimized portfolio vs S&P 500."""
+    st.subheader("Value-Add Analysis")
+    st.write("Is diversification worth it, or should you just buy S&P 500?")
+
+    symbols = portfolio.get_symbols(include_cash=False)
+    available = [s for s in symbols if s in prices.columns]
+
+    if len(available) < 2:
+        st.warning("Need at least 2 assets for value-add analysis.")
+        return
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    with col1:
+        train_months = st.slider("Train Window (months)", 6, 24, 12, key="va_train")
+
+    with col2:
+        test_months = st.slider("Test Window (months)", 1, 6, 3, key="va_test")
+
+    with col3:
+        period = st.selectbox(
+            "Historical Period",
+            ["3y", "5y", "10y"],
+            index=1,
+            key="va_period",
+            help="More data = more test windows = more reliable results",
+        )
+
+    with col4:
+        objective = st.selectbox(
+            "Objective",
+            ["Max Sharpe", "Max Sortino", "Min Volatility"],
+            key="va_obj",
+        )
+
+    if st.button("Run Value-Add Analysis", type="primary", key="va_btn"):
+        # Fetch fresh data with the selected period
+        fetcher = MarketDataFetcher()
+
+        with st.spinner(f"Fetching {period} of market data..."):
+            all_symbols = available + ["SPY"]
+            prices_with_spy = fetcher.get_historical_prices(all_symbols, period=period)
+
+        if "SPY" not in prices_with_spy.columns:
+            st.error("Could not fetch SPY data for benchmark comparison.")
+            return
+
+        if prices_with_spy.empty:
+            st.error("Could not fetch price data.")
+            return
+
+        with st.spinner("Running value-add analysis (this may take a minute)..."):
+            if "Sharpe" in objective:
+                obj = Objective.MAX_SHARPE
+            elif "Sortino" in objective:
+                obj = Objective.MAX_SORTINO
+            else:
+                obj = Objective.MIN_VOLATILITY
+
+            try:
+                result = run_value_add_analysis(
+                    prices=prices_with_spy,
+                    symbols=available,
+                    train_months=train_months,
+                    test_months=test_months,
+                    objective=obj,
+                    max_weight=0.3,
+                    risk_free_rate=risk_free_rate,
+                )
+            except ValueError as e:
+                st.error(str(e))
+                return
+
+            # Determine what metric is used for "Beat?"
+            if obj == Objective.MAX_SHARPE:
+                beat_metric = "Sharpe"
+            elif obj == Objective.MAX_SORTINO:
+                beat_metric = "Sortino"
+            elif obj == Objective.MIN_VOLATILITY:
+                beat_metric = "Vol"
+            else:
+                beat_metric = "Return"
+
+            # Per-window results
+            st.write(f"**Results ({len(result.windows)} test windows):**")
+
+            window_data = []
+            beat_col = f"Beat ({beat_metric})"
+            for w in result.windows:
+                window_data.append({
+                    "Window": w.window_num + 1,
+                    "Test Period": f"{w.test_start} to {w.test_end}",
+                    "Port Return": f"{w.portfolio_return*100:+.1f}%",
+                    "SPY Return": f"{w.spy_return*100:+.1f}%",
+                    "Port Vol": f"{w.portfolio_volatility*100:.1f}%",
+                    "SPY Vol": f"{w.spy_volatility*100:.1f}%",
+                    "Port Down Vol": f"{w.portfolio_downside_vol*100:.1f}%",
+                    "SPY Down Vol": f"{w.spy_downside_vol*100:.1f}%",
+                    beat_col: "✓" if w.beat_benchmark else "✗",
+                })
+
+            df = pd.DataFrame(window_data)
+            st.dataframe(df, use_container_width=True, hide_index=True)
+
+            # Summary metrics
+            st.write("**Total Out-of-Sample Returns:**")
+            col1, col2, col3 = st.columns(3)
+
+            with col1:
+                delta = result.total_portfolio_return - result.total_spy_return
+                st.metric(
+                    "Portfolio",
+                    f"{result.total_portfolio_return*100:+.1f}%",
+                    delta=f"{delta*100:+.1f}% vs SPY",
+                )
+
+            with col2:
+                st.metric("S&P 500", f"{result.total_spy_return*100:+.1f}%")
+
+            with col3:
+                st.metric("Win Rate", f"{result.win_rate*100:.0f}%", help="% of periods beating SPY")
+
+            # Risk-adjusted metrics
+            st.write("**Risk-Adjusted Performance:**")
+            metrics_df = pd.DataFrame([
+                {
+                    "Metric": "Sharpe Ratio",
+                    "Portfolio": f"{result.avg_portfolio_sharpe:.2f}",
+                    "S&P 500": f"{result.avg_spy_sharpe:.2f}",
+                    "Difference": result.avg_portfolio_sharpe - result.avg_spy_sharpe,
+                },
+                {
+                    "Metric": "Sortino Ratio",
+                    "Portfolio": f"{result.avg_portfolio_sortino:.2f}",
+                    "S&P 500": f"{result.avg_spy_sortino:.2f}",
+                    "Difference": result.avg_portfolio_sortino - result.avg_spy_sortino,
+                },
+            ])
+            st.dataframe(
+                metrics_df.style.format({"Difference": "{:+.2f}"}).map(
+                    lambda x: "color: green" if x > 0 else "color: red" if x < 0 else "",
+                    subset=["Difference"]
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            # Value-add metrics
+            st.write("**Value-Add Metrics:**")
+            col1, col2, col3, col4 = st.columns(4)
+
+            with col1:
+                alpha_delta = "positive" if result.alpha > 0 else "negative"
+                st.metric("Alpha (ann.)", f"{result.alpha*100:+.2f}%", delta=alpha_delta, delta_color="normal" if result.alpha > 0 else "inverse")
+
+            with col2:
+                st.metric("Tracking Error", f"{result.tracking_error*100:.1f}%")
+
+            with col3:
+                ir_color = "normal" if result.information_ratio > 0 else "inverse"
+                st.metric("Information Ratio", f"{result.information_ratio:.2f}", delta_color=ir_color)
+
+            with col4:
+                conf_text = f"{result.confidence_pct:.0f}%"
+                st.metric("Confidence", conf_text, help=f"p-value: {result.p_value:.3f}")
+
+            # Last optimized portfolio
+            st.write("**Last Optimized Portfolio:**")
+            weights_data = []
+            sorted_weights = sorted(result.last_weights.items(), key=lambda x: x[1], reverse=True)
+            for symbol, weight in sorted_weights:
+                if weight > 0.001:
+                    weights_data.append({"Symbol": symbol, "Weight": f"{weight*100:.1f}%"})
+
+            if weights_data:
+                weights_df = pd.DataFrame(weights_data)
+                st.dataframe(weights_df, use_container_width=True, hide_index=True)
+
+            # Verdict
+            st.write("**Verdict:**")
+            if "Strong evidence" in result.verdict:
+                st.success(result.verdict)
+            elif "Moderate evidence" in result.verdict:
+                st.warning(result.verdict)
+            elif "Consider SPY" in result.verdict:
+                st.error(result.verdict)
+            else:
+                st.info(result.verdict)
+
+
 # Template downloads
 TEMPLATES = {
     "quantity": """symbol,quantity,cost_basis,account
@@ -1129,6 +1361,7 @@ if uploaded_file is not None:
             "📊 Benchmark",
             "💰 Tax Harvest",
             "🔄 Walk-Forward",
+            "💎 Value-Add",
         ])
 
         with tabs[0]:  # Summary
@@ -1182,6 +1415,12 @@ if uploaded_file is not None:
         with tabs[9]:  # Walk-Forward
             if not prices.empty:
                 show_walkforward(portfolio, prices, risk_free_rate)
+            else:
+                st.warning("No price data available.")
+
+        with tabs[10]:  # Value-Add
+            if not prices.empty:
+                show_value_add(portfolio, prices, risk_free_rate)
             else:
                 st.warning("No price data available.")
 

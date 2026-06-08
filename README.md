@@ -286,6 +286,41 @@ uv run portfolio walkforward Portfolio_Positions.csv --train 6 --test 2 --object
 - Overfitting score (0-100%, lower is better)
 - Consistency score (% of windows with positive test Sharpe)
 
+### `portfolio value-add <csv>`
+
+Analyze if portfolio diversification adds value over simply holding S&P 500.
+
+```bash
+# Default: 12-month train, 3-month test, 5 years of data
+uv run portfolio value-add Portfolio_Positions.csv
+
+# More historical data for more test windows
+uv run portfolio value-add Portfolio_Positions.csv --period 10y
+
+# Custom windows
+uv run portfolio value-add Portfolio_Positions.csv --train 6 --test 2
+```
+
+**Options:**
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--train` | `12` | Training window in months |
+| `--test` | `3` | Test window in months |
+| `--period` | `5y` | Historical data period (3y, 5y, 10y) - more data = more test windows |
+| `--objective` | `max_sharpe` | Optimization objective: `max_sharpe`, `max_sortino`, `min_volatility` |
+| `--max-position` | `0.30` | Maximum weight per position |
+| `--method` | `historical` | Return estimation: `historical` or `capm` |
+
+**Output includes:**
+- Per-window portfolio vs S&P 500 returns
+- Total out-of-sample return comparison
+- Sharpe and Sortino ratio comparison
+- Alpha (annualized excess return)
+- Information ratio (alpha / tracking error)
+- Win rate (% of periods beating SPY)
+- Statistical confidence and p-value
+- Verdict: whether diversification adds value
+
 ### `portfolio tax-harvest <csv>`
 
 Analyze tax-loss harvesting opportunities.

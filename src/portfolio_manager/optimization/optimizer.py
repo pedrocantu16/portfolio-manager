@@ -189,6 +189,8 @@ class PortfolioOptimizer:
         min_weight: float = 0.0,
         max_weight: float = 1.0,
         target_return: float | None = None,
+        ticker_max: dict[str, float] | None = None,
+        ticker_min: dict[str, float] | None = None,
     ) -> OptimizationResult:
         """Run portfolio optimization.
 
@@ -197,6 +199,8 @@ class PortfolioOptimizer:
             min_weight: Minimum weight per asset (0 = no shorting).
             max_weight: Maximum weight per asset (1 = no single asset > 100%).
             target_return: Required for TARGET_RETURN objective.
+            ticker_max: Per-ticker maximum weights (e.g., {"BND": 0.10}).
+            ticker_min: Per-ticker minimum weights (e.g., {"VOO": 0.20}).
 
         Returns:
             OptimizationResult with optimal weights and metrics.
@@ -204,8 +208,16 @@ class PortfolioOptimizer:
         # Initial guess: equal weights
         x0 = np.array([1.0 / self.n_assets] * self.n_assets)
 
-        # Bounds for each weight
-        bounds = weight_bounds(self.n_assets, min_weight, max_weight)
+        # Build per-asset bounds
+        bounds = []
+        for i, symbol in enumerate(self.symbols):
+            asset_min = min_weight
+            asset_max = max_weight
+            if ticker_min and symbol in ticker_min:
+                asset_min = max(asset_min, ticker_min[symbol])
+            if ticker_max and symbol in ticker_max:
+                asset_max = min(asset_max, ticker_max[symbol])
+            bounds.append((asset_min, asset_max))
 
         # Base constraint: weights sum to 1
         constraints = [weights_sum_to_one()]
